@@ -1,0 +1,40 @@
+# Broker API
+kiteconnect==5.0.1
+
+# Database
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.25
+asyncpg==0.29.0
+redis==5.0.1
+
+# Scheduling
+APScheduler==3.10.4
+
+# Data & Analysis
+pandas==2.1.4
+numpy==1.26.3
+ta-lib==0.4.28
+vectorbt==0.26.2
+
+# Telegram
+python-telegram-bot==20.7
+
+# Config & Validation
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# Logging
+loguru==0.7.2
+
+# Async
+aiohttp==3.9.1
+websockets==12.0
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+pytest-mock==3.12.0
+
+# Data storage
+pyarrow==14.0.2
