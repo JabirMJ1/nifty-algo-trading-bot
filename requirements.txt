@@ -13,7 +13,6 @@ APScheduler==3.10.4
 # Data & Analysis
 pandas==2.1.4
 numpy==1.26.3
-ta-lib==0.4.28
 vectorbt==0.26.2
 
 # Telegram
@@ -38,3 +37,7 @@ pytest-mock==3.12.0
 
 # Data storage
 pyarrow==14.0.2
+
+# News & Sentiment
+anthropic>=0.40.0
+newsapi-python==0.2.7

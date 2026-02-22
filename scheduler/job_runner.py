@@ -22,6 +22,7 @@ class JobRunner:
         order_manager=None,
         candle_builder=None,
         kite_feed=None,
+        straddle_strategy=None,
     ):
         self.scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
         self._health = health_check
@@ -31,6 +32,7 @@ class JobRunner:
         self._order_manager = order_manager
         self._candle_builder = candle_builder
         self._kite_feed = kite_feed
+        self._straddle = straddle_strategy
 
     def setup_jobs(self):
         """Configure all scheduled jobs."""
@@ -76,6 +78,23 @@ class JobRunner:
             id="pre_market",
             name="Pre-Market Check",
         )
+
+        # 9:20 Straddle entry trigger
+        if self._straddle:
+            self.scheduler.add_job(
+                self._on_straddle_entry,
+                CronTrigger(hour=9, minute=20, day_of_week="mon-fri"),
+                id="straddle_entry",
+                name="9:20 Straddle Entry",
+            )
+
+            # 3:10 Straddle exit trigger
+            self.scheduler.add_job(
+                self._on_straddle_exit,
+                CronTrigger(hour=15, minute=10, day_of_week="mon-fri"),
+                id="straddle_exit",
+                name="3:10 Straddle Exit",
+            )
 
         log.info("All scheduled jobs configured")
 
@@ -143,6 +162,22 @@ class JobRunner:
                 EventType.ALERT,
                 {"type": "PRE_MARKET_OK", "message": "All pre-market checks passed. Ready to trade."},
             )
+
+    async def _on_straddle_entry(self):
+        """Trigger 9:20 straddle entry."""
+        log.info("=== 9:20 STRADDLE ENTRY TRIGGER ===")
+        await event_bus.publish(
+            EventType.ALERT,
+            {"type": "STRADDLE_ENTRY", "message": "9:20 AM — Straddle entry triggered."},
+        )
+
+    async def _on_straddle_exit(self):
+        """Trigger 3:10 straddle exit."""
+        log.info("=== 3:10 STRADDLE EXIT TRIGGER ===")
+        await event_bus.publish(
+            EventType.ALERT,
+            {"type": "STRADDLE_EXIT", "message": "3:10 PM — Closing straddle positions."},
+        )
 
     def start(self):
         """Start the scheduler."""

@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     MAX_OPEN_POSITIONS: int = 3
 
     # Instruments (comma-separated in .env)
-    INSTRUMENTS: List[str] = ["NSE:NIFTY25FEBFUT"]
+    INSTRUMENTS: str = "NSE:NIFTY25FEBFUT"
 
     # Strategy defaults
     EMA_FAST: int = 9
@@ -44,17 +44,29 @@ class Settings(BaseSettings):
     # Slippage simulation (ticks)
     SLIPPAGE_TICKS: int = 2
 
+    # News Sentiment
+    NEWS_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
+    NEWS_FETCH_INTERVAL_MIN: int = 15
+    NEWS_SENTIMENT_ENABLED: bool = True
+
+    # Historical sentiment (backtesting)
+    ALPHAVANTAGE_API_KEY: str = ""
+
+    # Options — directional buying (CE/PE)
+    TRADE_OPTIONS: bool = False        # True → use OptionsDirectionalBuyer instead of futures
+    OPTIONS_LOT_SIZE: int = 75         # Nifty weekly lot size
+    OPTIONS_STOP_PCT: float = 50.0     # exit if premium drops this % from entry
+    OPTIONS_TARGET_MULT: float = 2.5   # exit if premium reaches this multiple of entry
+
     # Costs
     BROKERAGE_PER_ORDER: float = 20.0  # rupees
     STT_PCT: float = 0.05
     EXCHANGE_CHARGES_PCT: float = 0.0019
 
-    @field_validator("INSTRUMENTS", mode="before")
-    @classmethod
-    def parse_instruments(cls, v):
-        if isinstance(v, str):
-            return [i.strip() for i in v.split(",") if i.strip()]
-        return v
+    @property
+    def instruments_list(self) -> list:
+        return [i.strip() for i in self.INSTRUMENTS.split(",") if i.strip()]
 
     model_config = {
         "env_file": ".env",

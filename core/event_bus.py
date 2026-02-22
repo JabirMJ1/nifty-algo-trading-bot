@@ -19,6 +19,7 @@ class EventType(str, Enum):
     POSITION_UPDATE = "POSITION_UPDATE"
     KILL_SWITCH = "KILL_SWITCH"
     SHUTDOWN = "SHUTDOWN"
+    SENTIMENT = "SENTIMENT"
 
 
 # Type alias for subscriber callbacks

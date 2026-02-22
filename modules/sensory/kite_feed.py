@@ -37,7 +37,7 @@ class KiteFeed:
     def resolve_instruments(self):
         """Resolve instrument symbols to tokens."""
         all_instruments = self.kite.instruments()
-        for symbol in settings.INSTRUMENTS:
+        for symbol in settings.instruments_list:
             exchange, tradingsymbol = symbol.split(":")
             for inst in all_instruments:
                 if (

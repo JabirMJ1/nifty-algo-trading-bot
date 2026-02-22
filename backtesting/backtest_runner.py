@@ -1,6 +1,7 @@
 """Backtesting engine — runs strategies on historical data."""
 
 from datetime import datetime, time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Type
 
 import pandas as pd
@@ -12,6 +13,37 @@ from modules.risk.position_sizer import calculate_atr
 from backtesting.performance import calculate_metrics, print_report
 
 log = get_logger("backtest_runner")
+
+_SENTIMENT_PATH = Path("data/sentiment_history.parquet")
+
+
+def _load_sentiment_history() -> Optional[Dict]:
+    """Load pre-fetched AlphaVantage sentiment data keyed by date.
+
+    Returns a dict mapping datetime.date → {"score": float, "magnitude": float}
+    or None if the parquet file doesn't exist.
+    """
+    if not _SENTIMENT_PATH.exists():
+        return None
+
+    df = pd.read_parquet(_SENTIMENT_PATH)
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+
+    lookup = {}
+    for _, row in df.iterrows():
+        lookup[row["date"]] = {
+            "symbol": "MARKET",
+            "score": float(row["score"]),
+            "magnitude": float(row["magnitude"]),
+            "summary": f"Historical: {int(row['article_count'])} articles",
+            "headline_count": int(row["article_count"]),
+        }
+
+    log.info(
+        f"Loaded sentiment history: {len(lookup)} days "
+        f"({min(lookup)} → {max(lookup)})"
+    )
+    return lookup
 
 
 class BacktestRunner:
@@ -28,6 +60,7 @@ class BacktestRunner:
         self.position = None
         self.trades: List[Dict[str, Any]] = []
         self.candle_history: List[Dict[str, Any]] = []
+        self._sentiment_lookup: Optional[Dict] = _load_sentiment_history()
 
     def run(self, df: pd.DataFrame, symbol: str = "BACKTEST") -> Dict[str, Any]:
         """Run backtest on a DataFrame of OHLCV data.
@@ -79,6 +112,16 @@ class BacktestRunner:
                 if exit_reason:
                     self._close_position(candle["close"], candle["timestamp"], exit_reason)
 
+            # Inject daily sentiment into strategy cache (if history loaded)
+            if self._sentiment_lookup and hasattr(idx, "date"):
+                candle_date = idx.date()
+                sentiment_today = self._sentiment_lookup.get(candle_date)
+                if hasattr(self.strategy, "_sentiment_cache"):
+                    if sentiment_today:
+                        self.strategy._sentiment_cache["MARKET"] = sentiment_today
+                    else:
+                        self.strategy._sentiment_cache.pop("MARKET", None)
+
             # Feed candle to strategy
             # Build history for strategy
             self.strategy._candle_history.setdefault(symbol, []).append(candle)
@@ -119,9 +162,12 @@ class BacktestRunner:
 
         entry_price = candle["close"]
 
-        # Set stops
-        stop_distance = atr * settings.STOP_ATR_MULTIPLIER
-        target_distance = atr * settings.TARGET_ATR_MULTIPLIER
+        # Set stops — use signal metadata overrides if available
+        meta = signal.metadata if hasattr(signal, "metadata") else {}
+        stop_mult = meta.get("stop_multiplier", settings.STOP_ATR_MULTIPLIER)
+        target_mult = meta.get("target_multiplier", settings.TARGET_ATR_MULTIPLIER)
+        stop_distance = atr * stop_mult
+        target_distance = atr * target_mult
 
         if signal.direction.value == "BUY":
             stop_loss = entry_price - stop_distance

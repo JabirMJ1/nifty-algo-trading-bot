@@ -15,12 +15,15 @@ from core.event_bus import event_bus, EventType
 from core.logger import get_logger
 from modules.sensory.kite_feed import KiteFeed
 from modules.sensory.candle_builder import CandleBuilder
-from modules.strategy.ema_crossover import EMACrossoverStrategy
+from modules.sensory.news_sentiment import NewsSentimentFeed
+from modules.strategy.adaptive_strategy import AdaptiveStrategy
+from modules.strategy.straddle_920 import Straddle920Strategy
 from modules.risk.position_sizer import PositionSizer
 from modules.risk.stop_manager import StopManager
 from modules.risk.circuit_breaker import CircuitBreaker
 from modules.execution.paper_trader import PaperTrader
 from modules.execution.order_manager import OrderManager
+from modules.execution.options_directional_buyer import OptionsDirectionalBuyer
 from modules.state.position_tracker import PositionTracker
 from modules.state.trade_journal import TradeJournal
 from modules.state.market_memory import MarketMemory
@@ -42,13 +45,16 @@ class TradingBot:
         # Modules
         self.kite_feed = KiteFeed()
         self.candle_builder = CandleBuilder()
-        self.strategy = EMACrossoverStrategy()
+        self.strategy = AdaptiveStrategy()
+        self.straddle = Straddle920Strategy()
         self.position_sizer = PositionSizer()
         self.stop_manager = StopManager()
         self.circuit_breaker: Optional[CircuitBreaker] = None
         self.paper_trader: Optional[PaperTrader] = None
         self.order_manager: Optional[OrderManager] = None
+        self.options_buyer: Optional[OptionsDirectionalBuyer] = None
         self.position_tracker: Optional[PositionTracker] = None
+        self.news_feed: Optional[NewsSentimentFeed] = None
         self.trade_journal = TradeJournal()
         self.market_memory = MarketMemory()
         self.telegram = TelegramAlerts()
@@ -103,6 +109,18 @@ class TradingBot:
             paper_trader=self.paper_trader,
         )
 
+        # Options directional buyer
+        if settings.TRADE_OPTIONS:
+            self.options_buyer = OptionsDirectionalBuyer(
+                kite=self.kite_feed.get_kite() if not settings.PAPER_TRADE else None,
+                circuit_breaker=self.circuit_breaker,
+            )
+            log.info("Options mode: DIRECTIONAL BUYING (CE/PE)")
+
+        # News sentiment
+        if settings.NEWS_SENTIMENT_ENABLED:
+            self.news_feed = NewsSentimentFeed()
+
         # Scheduler
         self.scheduler = JobRunner(
             health_check=self.health_check,
@@ -112,6 +130,7 @@ class TradingBot:
             order_manager=self.order_manager,
             candle_builder=self.candle_builder,
             kite_feed=self.kite_feed,
+            straddle_strategy=self.straddle,
         )
 
     def _start_modules(self):
@@ -123,6 +142,8 @@ class TradingBot:
             self.paper_trader.start()
         if self.order_manager:
             self.order_manager.start()
+        if self.options_buyer:
+            self.options_buyer.start()
 
         self.position_tracker.start()
         self.trade_journal.start()
@@ -143,12 +164,16 @@ class TradingBot:
             await self.paper_trader.close_all_positions("SHUTDOWN")
         if self.order_manager:
             await self.order_manager.close_all_positions("SHUTDOWN")
+        if self.options_buyer:
+            await self.options_buyer.close_all_positions("SHUTDOWN")
 
         # Send final report
         if self.pnl_reporter:
             await self.pnl_reporter.send_eod_report()
 
         # Stop modules
+        if self.news_feed:
+            await self.news_feed.stop()
         if self.scheduler:
             self.scheduler.stop()
         await self.kite_feed.stop()
@@ -177,7 +202,7 @@ class TradingBot:
         log.info("=" * 50)
         log.info("  TRADING BOT STARTING")
         log.info(f"  Mode: {'PAPER' if settings.PAPER_TRADE else 'LIVE'}")
-        log.info(f"  Instruments: {settings.INSTRUMENTS}")
+        log.info(f"  Instruments: {settings.instruments_list}")
         log.info(f"  Capital: Rs. {settings.CAPITAL}")
         log.info("=" * 50)
 
@@ -185,6 +210,10 @@ class TradingBot:
         self._init_modules()
         self._start_modules()
         self._setup_signal_handlers()
+
+        # Start news sentiment feed (async)
+        if self.news_feed:
+            await self.news_feed.start()
 
         # Start event bus in background
         event_bus_task = asyncio.create_task(event_bus.start())
@@ -200,7 +229,7 @@ class TradingBot:
                 "message": (
                     f"Bot started\n"
                     f"Mode: {'PAPER' if settings.PAPER_TRADE else 'LIVE'}\n"
-                    f"Instruments: {', '.join(settings.INSTRUMENTS)}\n"
+                    f"Instruments: {', '.join(settings.instruments_list)}\n"
                     f"Capital: Rs. {settings.CAPITAL}"
                 ),
             },
