@@ -8,7 +8,7 @@ IST = pytz.timezone("Asia/Kolkata")
 MARKET_OPEN = time(9, 15)
 MARKET_CLOSE = time(15, 30)
 PRE_MARKET_START = time(9, 0)
-NO_SIGNAL_UNTIL = time(9, 45)  # skip first 30 min
+NO_SIGNAL_UNTIL = time(9, 30)  # skip first 15 min (opening volatility)
 
 
 def now_ist() -> datetime:
@@ -35,7 +35,7 @@ def is_pre_market() -> bool:
 
 
 def is_signal_allowed() -> bool:
-    """No signals in first 30 min of market (9:15–9:45)."""
+    """No signals in first 15 min of market (9:15–9:30)."""
     now = now_ist()
     current_time = now.time()
     return is_market_open() and current_time >= NO_SIGNAL_UNTIL

@@ -1,0 +1,72 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: SSH deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Wake instance if stopped ─────────────────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Start instance if stopped
+        run: |
+          STATE=$(aws ec2 describe-instances \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query "Reservations[0].Instances[0].State.Name" \
+            --output text)
+          echo "Current state: $STATE"
+
+          if [ "$STATE" = "stopped" ]; then
+            echo "Instance stopped — starting it..."
+            aws ec2 start-instances --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            aws ec2 wait instance-running --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            echo "Instance running. Waiting 30s for SSH to come up..."
+            sleep 30
+          elif [ "$STATE" = "stopping" ]; then
+            echo "Instance stopping — waiting for stopped state, then starting..."
+            aws ec2 wait instance-stopped --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            aws ec2 start-instances --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            aws ec2 wait instance-running --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            sleep 30
+          else
+            echo "Instance already $STATE — no action needed."
+          fi
+
+      # ── Deploy ───────────────────────────────────────────────────────────────
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/trading-bot
+
+            echo "--- Pulling latest code ---"
+            git pull origin main
+
+            echo "--- Refreshing .env from Secrets Manager ---"
+            aws secretsmanager get-secret-value \
+              --secret-id "trading-bot/env" \
+              --query SecretString \
+              --output text \
+              --region ap-south-1 \
+            > .env
+
+            echo "--- Rebuilding and restarting bot ---"
+            docker compose down
+            docker compose up -d --build
+
+            echo "--- Deploy complete ---"
+            docker compose ps

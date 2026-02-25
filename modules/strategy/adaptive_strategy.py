@@ -9,7 +9,7 @@ Edge sources:
 
 Signal scoring system (0-100):
 - Each factor adds confidence points
-- Trade only when score >= 60
+- Trade only when score >= 65
 - Score determines position size multiplier
 """
 
@@ -149,16 +149,16 @@ class AdaptiveStrategy(BaseStrategy):
         self.vix.update(candle)
         self.gap.update(candle)
 
-        # ─── Phase 1: Build first hour data (9:15 - 10:15) ─────────
-        if candle_time < time(10, 15):
+        # ─── Phase 1: Build opening range data (9:15 - 9:30) ───────
+        if candle_time < time(9, 30):
             return None
 
-        # Set first hour direction once
+        # Set opening range direction once
         if not self._first_hour_set.get(symbol):
             self._first_hour_set[symbol] = True
             first_candles = [
                 c for c in self._today_candles[symbol]
-                if self._get_time(c) and self._get_time(c) < time(10, 15)
+                if self._get_time(c) and self._get_time(c) < time(9, 30)
             ]
             if first_candles:
                 first_open = first_candles[0]["open"]
@@ -170,7 +170,7 @@ class AdaptiveStrategy(BaseStrategy):
                 else:
                     self._first_hour_direction[symbol] = "NEUTRAL"
                 log.info(
-                    f"First hour {symbol}: {self._first_hour_direction[symbol]} "
+                    f"Opening range {symbol}: {self._first_hour_direction[symbol]} "
                     f"(open={first_open:.2f} close={last_close:.2f})"
                 )
 
@@ -185,9 +185,9 @@ class AdaptiveStrategy(BaseStrategy):
         if self._traded_today.get(symbol, 0) >= self.max_trades_per_day:
             return None
 
-        # Need enough history
+        # Need enough history for EMA-21 (the slowest indicator)
         history = self.get_history(symbol)
-        if len(history) < 30:
+        if len(history) < 21:
             return None
 
         # ─── Phase 2: Calculate indicators ──────────────────────────
