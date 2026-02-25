@@ -41,7 +41,8 @@ def refresh_kite_token() -> str | None:
         raise RuntimeError(f"Zerodha login failed: {resp.get('message')}")
     request_id = resp["data"]["request_id"]
 
-    # Step 2: TOTP
+    # Step 2: TOTP — use the twofa_type returned by the login response
+    twofa_type = resp["data"].get("twofa_type", "app_code")
     totp_code = pyotp.TOTP(settings.KITE_TOTP_SECRET).now()
     r = session.post(
         "https://kite.zerodha.com/api/twofa",
@@ -49,22 +50,29 @@ def refresh_kite_token() -> str | None:
             "user_id": settings.KITE_USER_ID,
             "request_id": request_id,
             "twofa_value": totp_code,
-            "twofa_type": "totp",
-            "skip_session": "",
+            "twofa_type": twofa_type,
         },
     )
     r.raise_for_status()
 
-    # Step 3: Follow login redirect to extract request_token
-    r = session.get(
-        f"https://kite.trade/connect/login?api_key={settings.KITE_API_KEY}&v=3",
-        allow_redirects=False,
-    )
-    redirect = r.headers.get("Location", "")
-    params = parse_qs(urlparse(redirect).query)
-    if "request_token" not in params:
-        raise RuntimeError(f"No request_token in redirect URL: {redirect}")
-    request_token = params["request_token"][0]
+    # Step 3: Walk the redirect chain manually, stop when we see request_token
+    # Chain: kite.trade → kite.zerodha.com/connect/login → /connect/finish → redirect_url?request_token=...
+    # The final redirect goes to the app's registered redirect URL (may be localhost) — never follow it.
+    next_url = f"https://kite.trade/connect/login?api_key={settings.KITE_API_KEY}&v=3"
+    request_token = None
+    for _ in range(10):
+        r = session.get(next_url, allow_redirects=False)
+        location = r.headers.get("Location", "")
+        params = parse_qs(urlparse(location).query)
+        if "request_token" in params:
+            request_token = params["request_token"][0]
+            break
+        if location:
+            next_url = location
+        else:
+            break
+    if not request_token:
+        raise RuntimeError("No request_token found after following redirects.")
 
     # Step 4: Exchange request_token for access_token
     kite = KiteConnect(api_key=settings.KITE_API_KEY)
