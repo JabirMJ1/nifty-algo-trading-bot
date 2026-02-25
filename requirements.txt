@@ -41,3 +41,6 @@ pyarrow==14.0.2
 # News & Sentiment
 anthropic>=0.40.0
 newsapi-python==0.2.7
+
+# Auto token refresh
+pyotp==2.9.0

@@ -102,11 +102,24 @@ class KiteFeed:
     async def start(self):
         """Start the Kite WebSocket feed in a background thread."""
         self._loop = asyncio.get_event_loop()
-        self.authenticate()
+
+        # Try auto token refresh (uses pyotp if KITE_USER_ID/PASSWORD/TOTP_SECRET are set)
+        try:
+            from modules.sensory.auto_token import refresh_kite_token
+            new_token = await asyncio.get_event_loop().run_in_executor(None, refresh_kite_token)
+            if new_token:
+                self.kite.set_access_token(new_token)
+                log.info("Kite authenticated with auto-refreshed token")
+            else:
+                self.authenticate()
+        except Exception as e:
+            log.warning(f"Auto token refresh failed: {e}. Falling back to existing token.")
+            self.authenticate()
+
         self.resolve_instruments()
 
         self.ticker = KiteTicker(
-            settings.KITE_API_KEY, settings.KITE_ACCESS_TOKEN
+            settings.KITE_API_KEY, self.kite.access_token
         )
         self.ticker.on_ticks = self._on_ticks
         self.ticker.on_connect = self._on_connect

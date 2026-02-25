@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     KITE_API_KEY: str = ""
     KITE_API_SECRET: str = ""
     KITE_ACCESS_TOKEN: str = ""
+    # Auto token refresh credentials (optional — if set, token is refreshed automatically on startup)
+    KITE_USER_ID: str = ""
+    KITE_PASSWORD: str = ""
+    KITE_TOTP_SECRET: str = ""
 
     # Telegram
     TELEGRAM_BOT_TOKEN: str = ""
