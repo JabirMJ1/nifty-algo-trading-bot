@@ -79,19 +79,22 @@ def refresh_kite_token() -> str | None:
     data = kite.generate_session(request_token, api_secret=settings.KITE_API_SECRET)
     access_token = data["access_token"]
 
-    # Step 5: Persist to .env so restarts within the day reuse it
-    env_path = Path(".env")
-    if env_path.exists():
-        content = env_path.read_text()
-        if "KITE_ACCESS_TOKEN=" in content:
-            content = re.sub(
-                r"KITE_ACCESS_TOKEN=.*",
-                f"KITE_ACCESS_TOKEN={access_token}",
-                content,
-            )
-        else:
-            content += f"\nKITE_ACCESS_TOKEN={access_token}\n"
-        env_path.write_text(content)
+    # Step 5: Persist to .env so restarts within the day reuse it (best-effort)
+    try:
+        env_path = Path(".env")
+        if env_path.exists():
+            content = env_path.read_text()
+            if "KITE_ACCESS_TOKEN=" in content:
+                content = re.sub(
+                    r"KITE_ACCESS_TOKEN=.*",
+                    f"KITE_ACCESS_TOKEN={access_token}",
+                    content,
+                )
+            else:
+                content += f"\nKITE_ACCESS_TOKEN={access_token}\n"
+            env_path.write_text(content)
+    except Exception as e:
+        log.debug(f"Auto token: could not persist to .env ({e}) — token still active in memory.")
 
     log.info("Auto token: Kite access token refreshed successfully.")
     return access_token
