@@ -1,5 +1,12 @@
-"""News sentiment feed — fetches Indian market headlines from NewsAPI and
-scores them with Claude Haiku, then publishes SENTIMENT events on the bus."""
+"""News sentiment feed — fetches Indian market headlines from RSS feeds and
+Alpha Vantage, scores them with Claude Haiku, then publishes SENTIMENT events
+on the bus.
+
+Sources (fetched in parallel):
+  1. RSS feeds  — ET Markets, Moneycontrol, Business Standard (~5 min delay)
+  2. Alpha Vantage NEWS_SENTIMENT — global macro: Fed, oil, geopolitical
+  3. NewsAPI (fallback only) — used when both primary sources return nothing
+"""
 
 import asyncio
 import json
@@ -7,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import aiohttp
 import anthropic
+import feedparser
 
 from core.config import settings
 from core.event_bus import EventType, event_bus
@@ -18,10 +26,20 @@ log = get_logger("news_sentiment")
 # IST offset
 _IST = timezone(timedelta(hours=5, minutes=30))
 
-# NewsAPI endpoint
-_NEWS_URL = "https://newsapi.org/v2/everything"
+# ── RSS feeds — Indian financial news ────────────────────────────────────────
+_RSS_FEEDS = [
+    "https://economictimes.indiatimes.com/rssfeedstopstories.cms",          # ET Top Stories
+    "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms",  # ET Markets
+    "https://www.livemint.com/rss/markets",                                 # Livemint Markets
+]
+_RSS_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"}
 
-# Topics relevant to Nifty / Indian macro
+# ── Alpha Vantage — global macro news ────────────────────────────────────────
+_AV_NEWS_URL = "https://www.alphavantage.co/query"
+_AV_TOPICS = "economy_monetary,financial_markets,economy_macro"
+
+# ── NewsAPI — legacy fallback ─────────────────────────────────────────────────
+_NEWS_URL = "https://newsapi.org/v2/everything"
 _QUERY = (
     "Nifty OR Sensex OR NSE OR BSE OR RBI OR "
     "India budget OR India GDP OR India inflation OR "
@@ -60,15 +78,11 @@ class NewsSentimentFeed:
 
     async def start(self):
         """Start the background news polling loop."""
-        if not settings.NEWS_API_KEY:
-            log.warning("NEWS_API_KEY not set — news sentiment disabled")
-            return
         if not settings.ANTHROPIC_API_KEY:
             log.warning("ANTHROPIC_API_KEY not set — news sentiment disabled")
             return
 
         self._running = True
-        # Run first fetch immediately, then loop
         asyncio.create_task(self._news_loop())
         log.info(
             f"News sentiment feed started (interval: {settings.NEWS_FETCH_INTERVAL_MIN} min)"
@@ -89,14 +103,78 @@ class NewsSentimentFeed:
 
             await asyncio.sleep(interval_secs)
 
-    async def _fetch_headlines(self) -> list[str]:
-        """Fetch recent Indian market headlines from NewsAPI."""
-        # Free plan has ~24h delay; paid plan has real-time access.
-        # Use 28h window to handle both tiers.
+    # ── Fetch methods ─────────────────────────────────────────────────────────
+
+    async def _fetch_rss_headlines(self) -> list[str]:
+        """Fetch India-specific headlines from RSS feeds (~5 min delay, free, no key needed)."""
+        headlines = []
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=8)
+
+        async with aiohttp.ClientSession(headers=_RSS_HEADERS) as session:
+            for url in _RSS_FEEDS:
+                try:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status != 200:
+                            log.debug(f"RSS {url.split('/')[2]} returned {resp.status}")
+                            continue
+                        content = await resp.text()
+                    # Parse XML content string (no network call, no blocking)
+                    feed = feedparser.parse(content)
+                    for entry in feed.entries[:10]:
+                        title = entry.get("title", "").strip()
+                        if not title:
+                            continue
+                        # Skip entries older than 8 hours
+                        published = entry.get("published_parsed")
+                        if published:
+                            pub_dt = datetime(*published[:6], tzinfo=timezone.utc)
+                            if pub_dt < cutoff:
+                                continue
+                        headlines.append(title)
+                except Exception as e:
+                    log.debug(f"RSS fetch failed ({url.split('/')[2]}): {e}")
+
+        return headlines
+
+    async def _fetch_alphavantage_headlines(self) -> list[str]:
+        """Fetch global macro headlines from Alpha Vantage (Fed, oil, geopolitical)."""
+        if not settings.ALPHAVANTAGE_API_KEY:
+            return []
+
+        params = {
+            "function": "NEWS_SENTIMENT",
+            "topics": _AV_TOPICS,
+            "sort": "LATEST",
+            "limit": "30",
+            "apikey": settings.ALPHAVANTAGE_API_KEY,
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    _AV_NEWS_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    if resp.status != 200:
+                        log.debug(f"Alpha Vantage news returned {resp.status}")
+                        return []
+                    data = await resp.json()
+        except Exception as e:
+            log.debug(f"Alpha Vantage fetch failed: {e}")
+            return []
+
+        return [
+            article.get("title", "").strip()
+            for article in data.get("feed", [])
+            if article.get("title", "").strip()
+        ][:15]
+
+    async def _fetch_newsapi_headlines(self) -> list[str]:
+        """Legacy NewsAPI fetch — last-resort fallback only."""
+        if not settings.NEWS_API_KEY:
+            return []
+
         from_time = (datetime.now(timezone.utc) - timedelta(hours=28)).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
-
         params = {
             "q": _QUERY,
             "language": "en",
@@ -105,23 +183,49 @@ class NewsSentimentFeed:
             "from": from_time,
             "apiKey": settings.NEWS_API_KEY,
         }
-
         async with aiohttp.ClientSession() as session:
-            async with session.get(_NEWS_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            async with session.get(
+                _NEWS_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
                 if resp.status != 200:
                     log.warning(f"NewsAPI returned {resp.status}")
                     return []
-
                 data = await resp.json()
-                articles = data.get("articles", [])
+                return [
+                    a.get("title", "").strip()
+                    for a in data.get("articles", [])
+                    if a.get("title", "").strip() and a.get("title") != "[Removed]"
+                ]
 
-                headlines = []
-                for a in articles:
-                    title = a.get("title", "").strip()
-                    if title and title != "[Removed]":
-                        headlines.append(title)
+    async def _fetch_headlines(self) -> list[str]:
+        """Fetch headlines from RSS + Alpha Vantage in parallel, deduplicate."""
+        rss_headlines, av_headlines = await asyncio.gather(
+            self._fetch_rss_headlines(),
+            self._fetch_alphavantage_headlines(),
+        )
 
-                return headlines
+        # Deduplicate by normalised title
+        seen: set[str] = set()
+        combined: list[str] = []
+        for h in rss_headlines + av_headlines:
+            key = h.lower().strip(".,!?\"' ")
+            if key not in seen:
+                seen.add(key)
+                combined.append(h)
+
+        log.debug(
+            f"Headlines: {len(rss_headlines)} RSS + {len(av_headlines)} AV "
+            f"= {len(combined)} unique"
+        )
+
+        # NewsAPI fallback: only when both primary sources returned nothing
+        if not combined:
+            log.debug("Primary sources empty — falling back to NewsAPI")
+            combined = await self._fetch_newsapi_headlines()
+
+        return combined[:20]  # cap for Claude context window
+
+    # ── Sentiment analysis ────────────────────────────────────────────────────
 
     async def _analyze_sentiment(self, headlines: list[str]) -> dict:
         """Send headlines to Claude Haiku for sentiment scoring."""
@@ -154,6 +258,8 @@ class NewsSentimentFeed:
         result["summary"] = str(result.get("summary", ""))[:120]
 
         return result
+
+    # ── Main pipeline ─────────────────────────────────────────────────────────
 
     async def _fetch_and_analyze(self):
         """Full pipeline: fetch → analyze → publish."""

@@ -380,19 +380,20 @@ class AdaptiveStrategy(BaseStrategy):
                 score += 10
 
         # ── Factor 7: News Sentiment (max +20, min -20) ──
+        # Moderate tier requires mag > 0.3 to avoid stale/routine news bias
         if sentiment:
             s = sentiment.get("score", 0.0)
             mag = sentiment.get("magnitude", 0.0)
-            if s > 0.7 and mag > 0.5:       # Very bullish, high confidence
-                if price > current_vwap:     # Chart confirms → amplify
+            if s > 0.7 and mag > 0.5:           # Very bullish, high confidence
+                if price > current_vwap:         # Chart confirms → amplify
                     score += 20
-                else:                        # News not yet in chart → cautious boost
+                else:                            # News not yet in chart → cautious boost
                     score += 5
-            elif s > 0.3:                    # Moderately bullish
+            elif s > 0.3 and mag > 0.3:         # Moderately bullish, meaningful news
                 score += 10
-            elif s < -0.7 and mag > 0.5:    # Very bearish → penalise buy
+            elif s < -0.7 and mag > 0.5:        # Very bearish → penalise buy
                 score -= 20
-            elif s < -0.3:                   # Moderately bearish
+            elif s < -0.3 and mag > 0.3:        # Moderately bearish, meaningful news
                 score -= 10
 
         # ── Penalties ──
@@ -492,19 +493,20 @@ class AdaptiveStrategy(BaseStrategy):
                 score += 10
 
         # ── Factor 7: News Sentiment (max +20, min -20) ──
+        # Moderate tier requires mag > 0.3 to avoid stale/routine news bias
         if sentiment:
             s = sentiment.get("score", 0.0)
             mag = sentiment.get("magnitude", 0.0)
-            if s < -0.7 and mag > 0.5:      # Very bearish, high confidence
-                if price < current_vwap:     # Chart confirms → amplify
+            if s < -0.7 and mag > 0.5:          # Very bearish, high confidence
+                if price < current_vwap:         # Chart confirms → amplify
                     score += 20
-                else:                        # News not yet in chart → cautious boost
+                else:                            # News not yet in chart → cautious boost
                     score += 5
-            elif s < -0.3:                   # Moderately bearish
+            elif s < -0.3 and mag > 0.3:        # Moderately bearish, meaningful news
                 score += 10
-            elif s > 0.7 and mag > 0.5:     # Very bullish → penalise sell
+            elif s > 0.7 and mag > 0.5:         # Very bullish → penalise sell
                 score -= 20
-            elif s > 0.3:                    # Moderately bullish
+            elif s > 0.3 and mag > 0.3:         # Moderately bullish, meaningful news
                 score -= 10
 
         # ── Penalties ──
