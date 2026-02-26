@@ -19,6 +19,7 @@ jobs:
           aws-region: ap-south-1
 
       - name: Start instance if stopped
+        id: ec2_state
         run: |
           STATE=$(aws ec2 describe-instances \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
@@ -42,11 +43,18 @@ jobs:
             echo "Instance already $STATE — no action needed."
           fi
 
+          EC2_IP=$(aws ec2 describe-instances \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text)
+          echo "ec2_ip=$EC2_IP" >> $GITHUB_OUTPUT
+          echo "Resolved IP: $EC2_IP"
+
       # ── Deploy ───────────────────────────────────────────────────────────────
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ steps.ec2_state.outputs.ec2_ip }}
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
