@@ -46,10 +46,12 @@ class JobRunner:
                 name="Health Check",
             )
 
+        IST = "Asia/Kolkata"
+
         # Market open (9:15 IST) — reset circuit breaker, initialize state
         self.scheduler.add_job(
             self._on_market_open,
-            CronTrigger(hour=9, minute=15, day_of_week="mon-fri"),
+            CronTrigger(hour=9, minute=15, day_of_week="mon-fri", timezone=IST),
             id="market_open",
             name="Market Open Reset",
         )
@@ -57,7 +59,7 @@ class JobRunner:
         # Market close (15:30 IST) — close all positions
         self.scheduler.add_job(
             self._on_market_close,
-            CronTrigger(hour=15, minute=30, day_of_week="mon-fri"),
+            CronTrigger(hour=15, minute=30, day_of_week="mon-fri", timezone=IST),
             id="market_close",
             name="Market Close",
         )
@@ -66,7 +68,7 @@ class JobRunner:
         if self._reporter:
             self.scheduler.add_job(
                 self._reporter.send_eod_report,
-                CronTrigger(hour=15, minute=35, day_of_week="mon-fri"),
+                CronTrigger(hour=15, minute=35, day_of_week="mon-fri", timezone=IST),
                 id="eod_report",
                 name="EOD Report",
             )
@@ -74,7 +76,7 @@ class JobRunner:
         # Pre-market checks (8:55 IST) — validate tokens, run checks
         self.scheduler.add_job(
             self._pre_market_check,
-            CronTrigger(hour=8, minute=55, day_of_week="mon-fri"),
+            CronTrigger(hour=8, minute=55, day_of_week="mon-fri", timezone=IST),
             id="pre_market",
             name="Pre-Market Check",
         )
@@ -83,7 +85,7 @@ class JobRunner:
         for hour in [10, 11, 12, 13, 14]:
             self.scheduler.add_job(
                 self._hourly_status,
-                CronTrigger(hour=hour, minute=0, day_of_week="mon-fri"),
+                CronTrigger(hour=hour, minute=0, day_of_week="mon-fri", timezone=IST),
                 id=f"hourly_status_{hour}",
                 name=f"Hourly Status {hour}:00",
             )
@@ -92,7 +94,7 @@ class JobRunner:
         if self._straddle:
             self.scheduler.add_job(
                 self._on_straddle_entry,
-                CronTrigger(hour=9, minute=20, day_of_week="mon-fri"),
+                CronTrigger(hour=9, minute=20, day_of_week="mon-fri", timezone=IST),
                 id="straddle_entry",
                 name="9:20 Straddle Entry",
             )
@@ -100,7 +102,7 @@ class JobRunner:
             # 3:10 Straddle exit trigger
             self.scheduler.add_job(
                 self._on_straddle_exit,
-                CronTrigger(hour=15, minute=10, day_of_week="mon-fri"),
+                CronTrigger(hour=15, minute=10, day_of_week="mon-fri", timezone=IST),
                 id="straddle_exit",
                 name="3:10 Straddle Exit",
             )
