@@ -19,6 +19,8 @@ class KiteFeed:
         self._instrument_tokens: Dict[str, int] = {}
         self._token_to_symbol: Dict[int, str] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._consecutive_403s: int = 0
+        self._restarting: bool = False
 
     def authenticate(self):
         """Set access token for Kite Connect session."""
@@ -94,10 +96,59 @@ class KiteFeed:
     def _on_error(self, ws, code, reason):
         """Callback on WebSocket error."""
         log.error(f"WebSocket error: code={code}, reason={reason}")
+        if "403" in str(reason):
+            self._consecutive_403s += 1
+        else:
+            self._consecutive_403s = 0
 
     def _on_reconnect(self, ws, attempts_count):
-        """Callback on reconnect attempts."""
+        """Callback on reconnect attempts — refresh token if repeated 403s detected."""
         log.info(f"WebSocket reconnecting... attempt {attempts_count}")
+        # 2+ consecutive 403s = expired token; refresh and recreate the ticker
+        if self._consecutive_403s >= 2 and not self._restarting:
+            log.warning(
+                f"Repeated 403 errors ({self._consecutive_403s}x) — refreshing Kite token"
+            )
+            if self._loop and self._loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self._refresh_and_restart(), self._loop
+                )
+
+    async def _refresh_and_restart(self):
+        """Refresh the Kite access token and recreate the WebSocket connection."""
+        if self._restarting:
+            return
+        self._restarting = True
+        try:
+            if self.ticker:
+                self.ticker.close()
+                await asyncio.sleep(2)
+
+            from modules.sensory.auto_token import refresh_kite_token
+            new_token = await asyncio.get_event_loop().run_in_executor(
+                None, refresh_kite_token
+            )
+            if new_token:
+                self.kite.set_access_token(new_token)
+                log.info("Kite token refreshed — restarting WebSocket")
+            else:
+                log.warning("Token refresh returned None — retrying with existing token")
+
+            self._consecutive_403s = 0
+            self.ticker = KiteTicker(settings.KITE_API_KEY, self.kite.access_token)
+            self.ticker.on_ticks = self._on_ticks
+            self.ticker.on_connect = self._on_connect
+            self.ticker.on_close = self._on_close
+            self.ticker.on_error = self._on_error
+            self.ticker.on_reconnect = self._on_reconnect
+
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.ticker.connect(threaded=True)
+            )
+        except Exception as e:
+            log.error(f"Token refresh and WebSocket restart failed: {e}")
+        finally:
+            self._restarting = False
 
     async def start(self):
         """Start the Kite WebSocket feed in a background thread."""
