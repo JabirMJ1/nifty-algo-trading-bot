@@ -79,6 +79,15 @@ class JobRunner:
             name="Pre-Market Check",
         )
 
+        # Hourly status during market hours (10:00 - 14:00 IST)
+        for hour in [10, 11, 12, 13, 14]:
+            self.scheduler.add_job(
+                self._hourly_status,
+                CronTrigger(hour=hour, minute=0, day_of_week="mon-fri"),
+                id=f"hourly_status_{hour}",
+                name=f"Hourly Status {hour}:00",
+            )
+
         # 9:20 Straddle entry trigger
         if self._straddle:
             self.scheduler.add_job(
@@ -162,6 +171,28 @@ class JobRunner:
                 EventType.ALERT,
                 {"type": "PRE_MARKET_OK", "message": "All pre-market checks passed. Ready to trade."},
             )
+
+    async def _hourly_status(self):
+        """Send hourly status update during market hours."""
+        from modules.sensory.market_hours import now_ist
+
+        pnl = self._breaker.get_daily_pnl() if self._breaker else 0.0
+        trades = self._breaker._trades_today if self._breaker else 0
+        mode = "PAPER" if self._trader else "LIVE"
+        time_str = now_ist().strftime("%H:%M IST")
+
+        msg = (
+            f"<b>Status {time_str}</b>\n"
+            f"Mode: {mode}\n"
+            f"Daily PnL: {pnl:+.2f}\n"
+            f"Trades today: {trades}"
+        )
+        if self._trader:
+            msg += f"\nBalance: {self._trader.balance:.2f}"
+
+        await event_bus.publish(
+            EventType.ALERT, {"type": "HOURLY_STATUS", "message": msg}
+        )
 
     async def _on_straddle_entry(self):
         """Trigger 9:20 straddle entry."""

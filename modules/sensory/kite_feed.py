@@ -131,8 +131,25 @@ class KiteFeed:
             if new_token:
                 self.kite.set_access_token(new_token)
                 log.info("Kite token refreshed — restarting WebSocket")
+                await event_bus.publish(
+                    EventType.ALERT,
+                    {
+                        "type": "TOKEN_REFRESH",
+                        "message": (
+                            f"WebSocket token auto-refreshed after "
+                            f"{self._consecutive_403s} consecutive 403 errors. Reconnecting..."
+                        ),
+                    },
+                )
             else:
                 log.warning("Token refresh returned None — retrying with existing token")
+                await event_bus.publish(
+                    EventType.ALERT,
+                    {
+                        "type": "TOKEN_REFRESH_FAILED",
+                        "message": "WebSocket 403 errors — token refresh returned None. Manual intervention may be needed.",
+                    },
+                )
 
             self._consecutive_403s = 0
             self.ticker = KiteTicker(settings.KITE_API_KEY, self.kite.access_token)

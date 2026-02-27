@@ -20,6 +20,8 @@ class HealthCheck:
         self._last_heartbeat: Optional[datetime] = None
         self._last_tick_time: Optional[datetime] = None
         self._tick_count = 0
+        self._last_health_alert: Optional[datetime] = None
+        self._health_alert_interval_min = 10  # max 1 alert per 10 min
 
     async def on_tick(self, tick_data: Dict[str, Any]):
         """Track last tick time for connectivity monitoring."""
@@ -50,13 +52,21 @@ class HealthCheck:
 
         if issues:
             log.warning(f"Health issues detected: {issues}")
-            await event_bus.publish(
-                EventType.ALERT,
-                {
-                    "type": "HEALTH_WARNING",
-                    "message": "Health Issues:\n" + "\n".join(f"- {i}" for i in issues),
-                },
+            # Rate-limit: only alert once per _health_alert_interval_min minutes
+            should_alert = (
+                self._last_health_alert is None
+                or (now - self._last_health_alert).total_seconds()
+                >= self._health_alert_interval_min * 60
             )
+            if should_alert:
+                self._last_health_alert = now
+                await event_bus.publish(
+                    EventType.ALERT,
+                    {
+                        "type": "HEALTH_WARNING",
+                        "message": "Health Issues:\n" + "\n".join(f"- {i}" for i in issues),
+                    },
+                )
 
         return status
 

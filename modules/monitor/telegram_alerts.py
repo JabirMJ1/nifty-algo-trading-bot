@@ -87,6 +87,35 @@ class TelegramAlerts:
             )
             await self.send_message(msg)
 
+    async def on_sentiment(self, data: Dict[str, Any]):
+        """Send sentiment update when magnitude is meaningful (>=0.4) to avoid spam."""
+        magnitude = data.get("magnitude", 0.0)
+        if magnitude < 0.4:
+            return
+
+        symbol = data.get("symbol", "MARKET")
+        score = data.get("score", 0.0)
+        summary = data.get("summary", "")
+        headline_count = data.get("headline_count", 0)
+
+        if score > 0.15:
+            direction = "BULLISH"
+        elif score < -0.15:
+            direction = "BEARISH"
+        else:
+            direction = "NEUTRAL"
+
+        label = "Equity (NSE)" if symbol == "EQUITY" else "Commodity (MCX)" if symbol == "COMMODITY" else "Market"
+
+        msg = (
+            f"<b>News Sentiment — {label}</b>\n"
+            f"Score: {score:+.2f} ({direction})\n"
+            f"Magnitude: {magnitude:.2f}\n"
+            f"Headlines: {headline_count}\n"
+            f"{summary}"
+        )
+        await self.send_message(msg)
+
     async def send_heartbeat(self):
         """Send a heartbeat message."""
         await self.send_message("<b>[HEARTBEAT]</b> Bot is alive and running.")
@@ -98,5 +127,6 @@ class TelegramAlerts:
     def start(self):
         event_bus.subscribe(EventType.ALERT, self.on_alert)
         event_bus.subscribe(EventType.TRADE, self.on_trade)
+        event_bus.subscribe(EventType.SENTIMENT, self.on_sentiment)
         status = "enabled" if self._enabled else "disabled (no token/chat_id)"
         log.info(f"Telegram alerts {status}")
