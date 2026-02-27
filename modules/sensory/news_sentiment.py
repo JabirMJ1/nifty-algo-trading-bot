@@ -154,7 +154,10 @@ class NewsSentimentFeed:
         return headlines
 
     async def _fetch_alphavantage_headlines(self) -> list[str]:
-        """Fetch global macro headlines from Alpha Vantage (Fed, oil, geopolitical)."""
+        """Fetch global macro headlines from Alpha Vantage (Fed, oil, geopolitical).
+
+        Retries once if the first response returns an empty feed.
+        """
         if not settings.ALPHAVANTAGE_API_KEY:
             return []
 
@@ -165,24 +168,36 @@ class NewsSentimentFeed:
             "limit": "30",
             "apikey": settings.ALPHAVANTAGE_API_KEY,
         }
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    _AV_NEWS_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)
-                ) as resp:
-                    if resp.status != 200:
-                        log.debug(f"Alpha Vantage news returned {resp.status}")
-                        return []
-                    data = await resp.json()
-        except Exception as e:
-            log.debug(f"Alpha Vantage fetch failed: {e}")
-            return []
 
-        return [
-            article.get("title", "").strip()
-            for article in data.get("feed", [])
-            if article.get("title", "").strip()
-        ][:15]
+        for attempt in range(2):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        _AV_NEWS_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)
+                    ) as resp:
+                        if resp.status != 200:
+                            log.debug(f"Alpha Vantage news returned {resp.status}")
+                            return []
+                        data = await resp.json()
+            except Exception as e:
+                log.debug(f"Alpha Vantage fetch failed: {e}")
+                return []
+
+            headlines = [
+                article.get("title", "").strip()
+                for article in data.get("feed", [])
+                if article.get("title", "").strip()
+            ][:15]
+
+            if headlines:
+                return headlines
+
+            if attempt == 0:
+                log.debug("Alpha Vantage returned empty feed — retrying in 5s")
+                await asyncio.sleep(5)
+
+        log.debug("Alpha Vantage returned empty feed after retry — falling back to RSS only")
+        return []
 
     async def _fetch_newsapi_headlines(self) -> list[str]:
         """Legacy NewsAPI fetch — last-resort fallback only."""

@@ -179,8 +179,10 @@ class AdaptiveStrategy(BaseStrategy):
                     f"(open={first_open:.2f} close={last_close:.2f})"
                 )
 
-        # Don't trade in the last hour or during lunch chop
-        if candle_time >= time(14, 30):
+        # Don't trade in the last hour — MCX trades until 23:30 IST, NSE until 15:30
+        exchange = symbol.split(":")[0].upper() if ":" in symbol else "NSE"
+        no_trade_cutoff = time(23, 0) if exchange == "MCX" else time(14, 30)
+        if candle_time >= no_trade_cutoff:
             return None
 
         # Lunch hour penalty (12:00-13:00) — reduce signals, don't block entirely
@@ -235,6 +237,13 @@ class AdaptiveStrategy(BaseStrategy):
         )
 
         # ─── Phase 4: Emit signal if score threshold met ────────────
+        log.debug(
+            f"SCORE {symbol} | buy={buy_score} sell={sell_score} | "
+            f"price={price:.1f} vwap={current_vwap:.1f} rsi={current_rsi:.1f} "
+            f"adx={adx:.1f} regime={self.vix.preferred_mode(symbol)} "
+            f"first_hour={self._first_hour_direction.get(symbol)}"
+        )
+
         min_score = 65
         signal = None
 

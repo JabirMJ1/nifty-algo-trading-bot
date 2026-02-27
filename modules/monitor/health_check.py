@@ -1,9 +1,10 @@
 """Bot health monitoring — heartbeat, WebSocket, and connectivity checks."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any, Dict, Optional
 from core.event_bus import event_bus, EventType
 from core.logger import get_logger
+from modules.sensory.market_hours import now_ist
 
 log = get_logger("health_check")
 
@@ -71,7 +72,14 @@ class HealthCheck:
         return status
 
     def _check_websocket(self, now: datetime) -> bool:
-        """Check if WebSocket is alive (received tick in last 60s)."""
+        """Check if WebSocket is alive (received tick in last 60s).
+
+        Returns True (no alert) outside market hours — no ticks expected pre-open
+        or after both NSE and MCX close.
+        """
+        ist_time = now_ist().time()
+        if ist_time < time(9, 0) or ist_time > time(23, 30):
+            return True  # Outside all market hours — silence false alarms
         if self._last_tick_time is None:
             return False
         return (now - self._last_tick_time).total_seconds() < 60

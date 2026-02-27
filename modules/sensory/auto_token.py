@@ -93,8 +93,8 @@ def refresh_kite_token() -> str | None:
             else:
                 content += f"\nKITE_ACCESS_TOKEN={access_token}\n"
             env_path.write_text(content)
-    except Exception as e:
-        log.debug(f"Auto token: could not persist to .env ({e}) — token still active in memory.")
+    except Exception:
+        pass  # .env is read-only in Docker (fetched from Secrets Manager) — token lives in memory
 
     log.info("Auto token: Kite access token refreshed successfully.")
     return access_token
