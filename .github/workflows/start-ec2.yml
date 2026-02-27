@@ -1,0 +1,54 @@
+name: Start EC2 (Pre-Market)
+
+on:
+  schedule:
+    - cron: "15 3 * * 1-5"  # 8:45 AM IST (3:15 UTC), Mon–Fri
+  workflow_dispatch:         # allow manual trigger
+
+jobs:
+  start:
+    name: Start trading-bot EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Start instance
+        run: |
+          STATE=$(aws ec2 describe-instances \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query "Reservations[0].Instances[0].State.Name" \
+            --output text)
+          echo "Current state: $STATE"
+
+          if [ "$STATE" = "stopped" ]; then
+            echo "Starting instance..."
+            aws ec2 start-instances --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            aws ec2 wait instance-running --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            echo "Instance running."
+          elif [ "$STATE" = "stopping" ]; then
+            echo "Instance still stopping — waiting then starting..."
+            aws ec2 wait instance-stopped --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            aws ec2 start-instances --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            aws ec2 wait instance-running --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            echo "Instance running."
+          else
+            echo "Instance already $STATE — no action needed."
+          fi
+
+      - name: Trigger deploy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'deploy.yml',
+              ref: 'main'
+            })
+            console.log('Deploy workflow triggered.')

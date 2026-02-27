@@ -1,0 +1,36 @@
+name: Stop EC2 (Market Close)
+
+on:
+  schedule:
+    - cron: "30 10 * * 1-5"  # 4:00 PM IST (10:30 UTC), Mon–Fri
+  workflow_dispatch:          # allow manual trigger
+
+jobs:
+  stop:
+    name: Stop trading-bot EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Stop instance
+        run: |
+          STATE=$(aws ec2 describe-instances \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query "Reservations[0].Instances[0].State.Name" \
+            --output text)
+          echo "Current state: $STATE"
+
+          if [ "$STATE" = "running" ]; then
+            echo "Stopping instance..."
+            aws ec2 stop-instances --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            aws ec2 wait instance-stopped --instance-ids "${{ secrets.EC2_INSTANCE_ID }}"
+            echo "Instance stopped."
+          else
+            echo "Instance already $STATE — no action needed."
+          fi
