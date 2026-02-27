@@ -1,0 +1,62 @@
+name: Archive Logs to S3
+
+on:
+  schedule:
+    - cron: "0 12 * * 5"   # Every Friday at 5:30 PM IST (12:00 UTC)
+  workflow_dispatch:        # Allow manual trigger
+
+jobs:
+  archive:
+    name: Export CloudWatch logs to S3
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Export last 7 days of logs to S3
+        run: |
+          BUCKET="trading-bot-logs-123456789012"
+          LOG_GROUP="/trading-bot/bot"
+          REGION="ap-south-1"
+
+          # Time range: last 7 days (in ms)
+          FROM=$(date -d "7 days ago" +%s%3N)
+          TO=$(date +%s%3N)
+          WEEK=$(date -d "7 days ago" +%Y-W%V)
+
+          echo "Exporting logs for week $WEEK..."
+
+          TASK_ID=$(aws logs create-export-task \
+            --log-group-name "$LOG_GROUP" \
+            --from "$FROM" \
+            --to "$TO" \
+            --destination "$BUCKET" \
+            --destination-prefix "weekly/$WEEK" \
+            --region "$REGION" \
+            --query "taskId" \
+            --output text)
+
+          echo "Export task ID: $TASK_ID"
+
+          # Wait for completion (max 5 min)
+          for i in $(seq 1 30); do
+            STATUS=$(aws logs describe-export-tasks \
+              --task-id "$TASK_ID" \
+              --region "$REGION" \
+              --query "exportTasks[0].status.code" \
+              --output text)
+            echo "Status: $STATUS"
+            if [ "$STATUS" = "COMPLETED" ]; then
+              echo "Export completed. Logs at s3://$BUCKET/weekly/$WEEK/"
+              break
+            elif [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "CANCELLED" ]; then
+              echo "Export $STATUS"
+              exit 1
+            fi
+            sleep 10
+          done
