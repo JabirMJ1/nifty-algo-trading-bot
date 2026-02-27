@@ -113,6 +113,11 @@ class AdaptiveStrategy(BaseStrategy):
             return ts.time()
         return None
 
+    def _get_sentiment_key(self, symbol: str) -> str:
+        """Return 'COMMODITY' for MCX instruments, 'EQUITY' for all others."""
+        exchange = symbol.split(":")[0].upper() if ":" in symbol else ""
+        return "COMMODITY" if exchange == "MCX" else "EQUITY"
+
     def start(self):
         """Subscribe to CANDLE and SENTIMENT events."""
         super().start()
@@ -216,7 +221,8 @@ class AdaptiveStrategy(BaseStrategy):
             return None
 
         # ─── Phase 3: Score BUY and SELL independently ──────────────
-        sentiment = self._sentiment_cache.get("MARKET", {})
+        sentiment_key = self._get_sentiment_key(symbol)
+        sentiment = self._sentiment_cache.get(sentiment_key, {})
         buy_score = self._score_buy(
             symbol, candle, price, fast_ema, slow_ema,
             prev_fast, prev_slow, current_rsi, current_vwap,

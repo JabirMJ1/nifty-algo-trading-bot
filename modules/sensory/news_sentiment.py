@@ -46,23 +46,38 @@ _QUERY = (
     "India economy OR Dalal Street"
 )
 
-_SYSTEM_PROMPT = """You are a financial market sentiment analyst specializing in Indian equity markets (Nifty50 index futures).
+_SYSTEM_PROMPT = """You are a financial market sentiment analyst specializing in Indian markets.
 
-You will receive a list of recent news headlines. Analyze their collective impact on Nifty50 futures trading sentiment.
+You will receive a list of recent news headlines. Analyze their collective impact on TWO asset classes traded in India:
+1. Indian equity markets (Nifty50 index futures on NSE)
+2. Commodities traded on MCX (gold, silver, crude oil)
+
+IMPORTANT: These asset classes often diverge. Classic examples:
+- Geopolitical tension (Iran, Ukraine, Middle East) → bearish equities (risk-off), BUT bullish gold/silver (safe-haven) and crude (supply risk)
+- US Fed rate pause / dollar weakness → bearish equities, bullish gold
+- Strong India GDP / RBI rate cut → bullish equities, neutral commodities
+- Risk-on rally / trade deal → bullish equities, bearish gold
 
 Respond ONLY with valid JSON in this exact format:
 {
-  "overall": <float between -1.0 and 1.0>,
-  "magnitude": <float between 0.0 and 1.0>,
+  "equity": {
+    "score": <float between -1.0 and 1.0>,
+    "magnitude": <float between 0.0 and 1.0>
+  },
+  "commodity": {
+    "score": <float between -1.0 and 1.0>,
+    "magnitude": <float between 0.0 and 1.0>
+  },
   "summary": "<one sentence max 100 chars>"
 }
 
 Where:
-- overall: -1.0 = very bearish (sell Nifty), 0.0 = neutral, +1.0 = very bullish (buy Nifty)
+- equity.score: -1.0 = very bearish Nifty, 0.0 = neutral, +1.0 = very bullish Nifty
+- commodity.score: -1.0 = bearish gold/silver/crude, 0.0 = neutral, +1.0 = bullish commodities
 - magnitude: 0.0 = weak/irrelevant news, 1.0 = high-impact market-moving news
-- summary: concise summary of dominant theme
+- summary: concise summary of the dominant theme across all headlines
 
-Consider as HIGH magnitude (>0.7): RBI rate decisions, Union Budget, geopolitical shocks, market circuit breakers, major corporate events.
+Consider as HIGH magnitude (>0.7): RBI rate decisions, Union Budget, geopolitical shocks, Fed decisions, oil supply disruptions.
 Consider as LOW magnitude (<0.3): routine corporate news, minor data releases, speculative articles."""
 
 
@@ -70,8 +85,10 @@ class NewsSentimentFeed:
     """Periodically fetches news and publishes SENTIMENT events."""
 
     def __init__(self):
-        self._last_score: float = 0.0
-        self._last_magnitude: float = 0.0
+        self._last_equity_score: float = 0.0
+        self._last_equity_magnitude: float = 0.0
+        self._last_commodity_score: float = 0.0
+        self._last_commodity_magnitude: float = 0.0
         self._last_summary: str = "No news analyzed yet"
         self._client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
         self._running = False
@@ -228,16 +245,20 @@ class NewsSentimentFeed:
     # ── Sentiment analysis ────────────────────────────────────────────────────
 
     async def _analyze_sentiment(self, headlines: list[str]) -> dict:
-        """Send headlines to Claude Haiku for sentiment scoring."""
+        """Send headlines to Claude Haiku for dual equity/commodity sentiment scoring."""
         if not headlines:
-            return {"overall": 0.0, "magnitude": 0.0, "summary": "No relevant news found"}
+            return {
+                "equity_score": 0.0, "equity_magnitude": 0.0,
+                "commodity_score": 0.0, "commodity_magnitude": 0.0,
+                "summary": "No relevant news found",
+            }
 
         headlines_text = "\n".join(f"- {h}" for h in headlines)
         user_message = f"Analyze the following {len(headlines)} recent headlines:\n\n{headlines_text}"
 
         message = await self._client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=200,
+            max_tokens=300,
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_message}],
         )
@@ -252,12 +273,16 @@ class NewsSentimentFeed:
 
         result = json.loads(raw)
 
-        # Clamp values to valid ranges
-        result["overall"] = max(-1.0, min(1.0, float(result.get("overall", 0.0))))
-        result["magnitude"] = max(0.0, min(1.0, float(result.get("magnitude", 0.0))))
-        result["summary"] = str(result.get("summary", ""))[:120]
+        equity = result.get("equity", {})
+        commodity = result.get("commodity", {})
 
-        return result
+        return {
+            "equity_score": max(-1.0, min(1.0, float(equity.get("score", 0.0)))),
+            "equity_magnitude": max(0.0, min(1.0, float(equity.get("magnitude", 0.0)))),
+            "commodity_score": max(-1.0, min(1.0, float(commodity.get("score", 0.0)))),
+            "commodity_magnitude": max(0.0, min(1.0, float(commodity.get("magnitude", 0.0)))),
+            "summary": str(result.get("summary", ""))[:120],
+        }
 
     # ── Main pipeline ─────────────────────────────────────────────────────────
 
@@ -277,25 +302,35 @@ class NewsSentimentFeed:
             log.warning(f"Sentiment analysis failed: {e} — keeping last score")
             return
 
-        self._last_score = result["overall"]
-        self._last_magnitude = result["magnitude"]
+        self._last_equity_score = result["equity_score"]
+        self._last_equity_magnitude = result["equity_magnitude"]
+        self._last_commodity_score = result["commodity_score"]
+        self._last_commodity_magnitude = result["commodity_magnitude"]
         self._last_summary = result["summary"]
 
-        sentiment_data = {
-            "symbol": "MARKET",
-            "score": self._last_score,
-            "magnitude": self._last_magnitude,
+        ts = now_ist()
+
+        await event_bus.publish(EventType.SENTIMENT, {
+            "symbol": "EQUITY",
+            "score": self._last_equity_score,
+            "magnitude": self._last_equity_magnitude,
             "summary": self._last_summary,
             "headline_count": len(headlines),
-            "timestamp": now_ist(),
-        }
+            "timestamp": ts,
+        })
 
-        await event_bus.publish(EventType.SENTIMENT, sentiment_data)
+        await event_bus.publish(EventType.SENTIMENT, {
+            "symbol": "COMMODITY",
+            "score": self._last_commodity_score,
+            "magnitude": self._last_commodity_magnitude,
+            "summary": self._last_summary,
+            "headline_count": len(headlines),
+            "timestamp": ts,
+        })
 
-        score_str = f"{self._last_score:+.2f}"
-        mag_str = f"{self._last_magnitude:.2f}"
         log.info(
-            f"Sentiment: score={score_str} magnitude={mag_str} "
+            f"Sentiment equity={self._last_equity_score:+.2f}/{self._last_equity_magnitude:.2f} "
+            f"commodity={self._last_commodity_score:+.2f}/{self._last_commodity_magnitude:.2f} "
             f"headlines={len(headlines)} | {self._last_summary}"
         )
 
@@ -304,6 +339,7 @@ class NewsSentimentFeed:
         log.info("Running test fetch...")
         await self._fetch_and_analyze()
         log.info(
-            f"Result: score={self._last_score:+.2f} "
-            f"magnitude={self._last_magnitude:.2f} | {self._last_summary}"
+            f"Result: equity={self._last_equity_score:+.2f}/{self._last_equity_magnitude:.2f} "
+            f"commodity={self._last_commodity_score:+.2f}/{self._last_commodity_magnitude:.2f} "
+            f"| {self._last_summary}"
         )
