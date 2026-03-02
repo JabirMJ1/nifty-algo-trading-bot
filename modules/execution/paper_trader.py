@@ -2,7 +2,6 @@
 
 import random
 import uuid
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from core.config import settings
@@ -12,6 +11,7 @@ from modules.execution.order_models import Order, OrderSide, OrderStatus, OrderT
 from modules.risk.circuit_breaker import CircuitBreaker
 from modules.risk.position_sizer import PositionSizer, calculate_atr
 from modules.risk.stop_manager import StopManager
+from modules.sensory.market_hours import now_ist
 
 log = get_logger("paper_trader")
 trade_log = get_trade_logger()
@@ -126,7 +126,7 @@ class PaperTrader:
             "direction": direction,
             "entry_price": fill_price,
             "quantity": quantity,
-            "entry_time": datetime.utcnow(),
+            "entry_time": now_ist(),
             "strategy": signal.get("strategy_name", "unknown"),
         }
 
@@ -186,7 +186,7 @@ class PaperTrader:
             quantity=pos["quantity"],
             pnl=net_pnl,
             entry_time=pos["entry_time"],
-            exit_time=datetime.utcnow(),
+            exit_time=now_ist(),
             strategy=pos["strategy"],
             exit_reason=reason,
             costs=costs,

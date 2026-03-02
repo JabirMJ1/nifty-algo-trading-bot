@@ -2,7 +2,6 @@
 
 import asyncio
 import uuid
-from datetime import datetime
 from typing import Any, Dict, Optional
 
 from kiteconnect import KiteConnect
@@ -13,6 +12,7 @@ from modules.execution.order_models import Order, OrderSide, OrderStatus, OrderT
 from modules.risk.circuit_breaker import CircuitBreaker
 from modules.risk.position_sizer import PositionSizer, calculate_atr
 from modules.risk.stop_manager import StopManager
+from modules.sensory.market_hours import now_ist
 
 log = get_logger("order_manager")
 trade_log = get_trade_logger()
@@ -108,7 +108,7 @@ class OrderManager:
                 "direction": side,
                 "entry_price": fill_price,
                 "quantity": quantity,
-                "entry_time": datetime.utcnow(),
+                "entry_time": now_ist(),
                 "strategy": signal_data.get("strategy_name", "unknown"),
             }
 

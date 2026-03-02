@@ -109,6 +109,10 @@ class AdaptiveStrategy(BaseStrategy):
 
     def _get_time(self, candle: Dict[str, Any]) -> Optional[time]:
         ts = candle["timestamp"]
+        if ts is None:
+            return None
+        if hasattr(ts, "tzinfo") and ts.tzinfo is None:
+            log.warning(f"Naive timestamp in candle {candle.get('symbol')}: {ts} — IST conversion missing")
         if hasattr(ts, "time"):
             return ts.time()
         return None

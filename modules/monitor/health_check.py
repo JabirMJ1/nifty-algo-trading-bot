@@ -1,6 +1,6 @@
 """Bot health monitoring — heartbeat, WebSocket, and connectivity checks."""
 
-from datetime import datetime, time, timedelta
+from datetime import time
 from typing import Any, Dict, Optional
 from core.event_bus import event_bus, EventType
 from core.logger import get_logger
@@ -26,12 +26,12 @@ class HealthCheck:
 
     async def on_tick(self, tick_data: Dict[str, Any]):
         """Track last tick time for connectivity monitoring."""
-        self._last_tick_time = datetime.utcnow()
+        self._last_tick_time = now_ist()
         self._tick_count += 1
 
     async def check_health(self) -> Dict[str, Any]:
         """Run all health checks and return status."""
-        now = datetime.utcnow()
+        now = now_ist()
         status = {
             "timestamp": now.isoformat(),
             "websocket_alive": self._check_websocket(now),
@@ -71,13 +71,13 @@ class HealthCheck:
 
         return status
 
-    def _check_websocket(self, now: datetime) -> bool:
+    def _check_websocket(self, now) -> bool:
         """Check if WebSocket is alive (received tick in last 60s).
 
         Returns True (no alert) outside market hours — no ticks expected pre-open
         or after both NSE and MCX close.
         """
-        ist_time = now_ist().time()
+        ist_time = now.time()  # now is already IST-aware via now_ist()
         if ist_time < time(9, 0) or ist_time > time(23, 30):
             return True  # Outside all market hours — silence false alarms
         if self._last_tick_time is None:
