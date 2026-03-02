@@ -7,12 +7,14 @@ Connects all modules and starts the event-driven pipeline.
 import asyncio
 import signal
 import sys
+from datetime import time as dt_time
 from typing import Optional
 
 import redis
 from core.config import settings
 from core.event_bus import event_bus, EventType
 from core.logger import get_logger
+from modules.sensory.market_hours import now_ist
 from modules.sensory.kite_feed import KiteFeed
 from modules.sensory.candle_builder import CandleBuilder
 from modules.sensory.news_sentiment import NewsSentimentFeed
@@ -167,8 +169,11 @@ class TradingBot:
         if self.options_buyer:
             await self.options_buyer.close_all_positions("SHUTDOWN")
 
-        # Send final report
-        if self.pnl_reporter:
+        # Send EOD report only when shutting down after market close (15:30 IST).
+        # The scheduler already sends the report at 15:35 for normal EOD.
+        # Skipping here avoids spurious "No trades today" messages on every deploy.
+        ist_now = now_ist().time()
+        if self.pnl_reporter and ist_now >= dt_time(15, 30):
             await self.pnl_reporter.send_eod_report()
 
         # Stop modules

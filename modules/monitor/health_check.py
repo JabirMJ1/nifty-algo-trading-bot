@@ -1,6 +1,6 @@
 """Bot health monitoring — heartbeat, WebSocket, and connectivity checks."""
 
-from datetime import time
+from datetime import datetime, time
 from typing import Any, Dict, Optional
 from core.event_bus import event_bus, EventType
 from core.logger import get_logger
