@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional
 from core.config import settings
 from core.event_bus import event_bus, EventType
 from core.logger import get_logger
-from modules.sensory.market_hours import now_ist
+from modules.sensory.market_hours import now_ist, utc_to_ist
 
 log = get_logger("candle_builder")
 
@@ -31,6 +31,11 @@ class CandleBuilder:
 
         if isinstance(ts, str):
             ts = datetime.fromisoformat(ts)
+
+        # Kite exchange_timestamp is a naive UTC datetime in Docker (system tz = UTC).
+        # Normalize to IST so all strategy time comparisons (9:30, 14:30, 23:00) work correctly.
+        if ts.tzinfo is None:
+            ts = utc_to_ist(ts)
 
         candle_start = self._get_candle_start(ts)
         candle_end = candle_start + timedelta(minutes=self.interval)
