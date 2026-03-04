@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     # S3 — EOD data archive (optional)
     S3_BUCKET: str = ""   # e.g. "my-trading-bot-data"; leave empty to disable
 
+    # Healthchecks.io dead-man's switch (optional — leave empty to disable)
+    HEALTHCHECKS_URL: str = ""
+
     # Options — directional buying (CE/PE)
     TRADE_OPTIONS: bool = False        # True → use OptionsDirectionalBuyer instead of futures
     OPTIONS_LOT_SIZE: int = 75         # Nifty weekly lot size

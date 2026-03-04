@@ -19,9 +19,8 @@
 
 ## Medium Impact (Operational)
 
-- [ ] **Dead-man's-switch / external uptime monitor** — if the EC2 instance itself goes down, nothing
-  alerts you. Integrate a free service (Healthchecks.io or UptimeRobot) that expects a periodic
-  heartbeat ping from the bot and emails/SMSes on silence.
+- [x] **Dead-man's-switch / Healthchecks.io** — `check_health()` now pings `HEALTHCHECKS_URL`
+  every 5 min. If the bot goes silent, Healthchecks.io sends an alert. URL stored in `.env`.
 
 - [ ] **Block deploys during market hours** — every push to `main` triggers `docker compose down` then
   `up`, causing missed ticks. Add a step in `.github/workflows/deploy.yml` that fails the job

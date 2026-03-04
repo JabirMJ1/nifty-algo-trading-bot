@@ -2,6 +2,8 @@
 
 from datetime import datetime, time
 from typing import Any, Dict, Optional
+import aiohttp
+from core.config import settings
 from core.event_bus import event_bus, EventType
 from core.logger import get_logger
 from modules.sensory.market_hours import now_ist
@@ -43,6 +45,9 @@ class HealthCheck:
         # Publish heartbeat
         self._last_heartbeat = now
         await event_bus.publish(EventType.HEARTBEAT, status)
+
+        # Ping dead-man's switch
+        await self._ping_healthchecks()
 
         # Check for issues
         issues = []
@@ -92,6 +97,17 @@ class HealthCheck:
             return self._redis.ping()
         except Exception:
             return False
+
+    async def _ping_healthchecks(self):
+        """Ping Healthchecks.io to confirm the bot is alive."""
+        url = settings.HEALTHCHECKS_URL
+        if not url:
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.get(url, timeout=aiohttp.ClientTimeout(total=5))
+        except Exception as e:
+            log.warning(f"Healthchecks.io ping failed: {e}")
 
     def _get_tick_age(self, now: datetime) -> float:
         """Seconds since last tick."""
