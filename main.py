@@ -226,6 +226,12 @@ class TradingBot:
         # Start Kite WebSocket feed
         await self.kite_feed.start()
 
+        # Warm up strategy with today's historical candles so indicators are
+        # ready immediately — no need to wait 21+ candles after a restart.
+        await self.candle_builder.warmup(
+            self.kite_feed.kite, self.kite_feed._instrument_tokens
+        )
+
         # Send startup alert
         await event_bus.publish(
             EventType.ALERT,

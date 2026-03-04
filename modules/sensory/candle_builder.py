@@ -85,6 +85,44 @@ class CandleBuilder:
         self._candles.clear()
         log.info("All building candles force-closed")
 
+    async def warmup(self, kite, instrument_tokens: Dict[str, int]):
+        """Fetch today's historical candles and publish as warmup CANDLE events.
+
+        Populates strategy indicator history from market open so the bot is
+        ready to trade immediately after a mid-day restart.
+        """
+        import pytz
+        ist = pytz.timezone("Asia/Kolkata")
+        today = now_ist().date()
+        # Start from 9:00 AM to capture MCX opening candles
+        from_dt = ist.localize(datetime.combine(today, datetime.min.time().replace(hour=9)))
+        to_dt = now_ist()
+
+        for symbol, token in instrument_tokens.items():
+            try:
+                bars = kite.historical_data(
+                    token, from_dt, to_dt, f"{self.interval}minute", continuous=False
+                )
+                for bar in bars:
+                    ts = bar["date"]
+                    if ts.tzinfo is None:
+                        ts = utc_to_ist(ts)
+                    candle = {
+                        "symbol": symbol,
+                        "timestamp": ts,
+                        "open": float(bar["open"]),
+                        "high": float(bar["high"]),
+                        "low": float(bar["low"]),
+                        "close": float(bar["close"]),
+                        "volume": int(bar["volume"]),
+                        "tick_count": 0,
+                        "warmup": True,
+                    }
+                    await event_bus.publish(EventType.CANDLE, candle)
+                log.info(f"Warmup: queued {len(bars)} historical candles for {symbol}")
+            except Exception as e:
+                log.warning(f"Warmup failed for {symbol}: {e}")
+
     def start(self):
         """Subscribe to tick events."""
         event_bus.subscribe(EventType.TICK, self.on_tick)

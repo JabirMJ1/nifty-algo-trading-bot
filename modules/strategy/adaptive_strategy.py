@@ -253,7 +253,8 @@ class AdaptiveStrategy(BaseStrategy):
 
         if buy_score >= min_score and buy_score > sell_score:
             strength = SignalStrength.STRONG if buy_score >= 75 else SignalStrength.MODERATE
-            self._traded_today[symbol] = self._traded_today.get(symbol, 0) + 1
+            if not candle.get("warmup"):
+                self._traded_today[symbol] = self._traded_today.get(symbol, 0) + 1
             signal = Signal(
                 instrument=symbol,
                 direction=Direction.BUY,
@@ -280,7 +281,8 @@ class AdaptiveStrategy(BaseStrategy):
 
         elif sell_score >= min_score and sell_score > buy_score:
             strength = SignalStrength.STRONG if sell_score >= 75 else SignalStrength.MODERATE
-            self._traded_today[symbol] = self._traded_today.get(symbol, 0) + 1
+            if not candle.get("warmup"):
+                self._traded_today[symbol] = self._traded_today.get(symbol, 0) + 1
             signal = Signal(
                 instrument=symbol,
                 direction=Direction.SELL,

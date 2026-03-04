@@ -33,6 +33,11 @@ class BaseStrategy(ABC):
             self._candle_history[symbol] = []
         self._candle_history[symbol].append(candle_data)
 
+        # Warmup candles: populate history + internal state, never emit signals
+        if candle_data.get("warmup"):
+            self.on_candle(candle_data)
+            return
+
         # Check if signals are allowed (skip first 30 min)
         if not is_signal_allowed():
             return
