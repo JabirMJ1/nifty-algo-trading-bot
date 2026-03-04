@@ -38,8 +38,9 @@ class BaseStrategy(ABC):
             self.on_candle(candle_data)
             return
 
-        # Check if signals are allowed (skip first 30 min)
-        if not is_signal_allowed():
+        # Check if signals are allowed for this exchange's session
+        exchange = symbol.split(":")[0] if ":" in symbol else "NSE"
+        if not is_signal_allowed(exchange):
             return
 
         signal = self.on_candle(candle_data)

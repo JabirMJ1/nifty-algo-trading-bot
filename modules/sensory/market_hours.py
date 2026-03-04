@@ -1,14 +1,20 @@
-"""NSE market session time helpers. All times in IST."""
+"""Market session time helpers. All times in IST."""
 
 from datetime import datetime, time
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
 
+# NSE
 MARKET_OPEN = time(9, 15)
 MARKET_CLOSE = time(15, 30)
 PRE_MARKET_START = time(9, 0)
 NO_SIGNAL_UNTIL = time(9, 30)  # skip first 15 min (opening volatility)
+
+# MCX — agri commodities (GOLDPETAL etc.) trade 9:00 AM – 9:00 PM IST
+MCX_OPEN = time(9, 0)
+MCX_CLOSE = time(21, 0)
+MCX_NO_SIGNAL_UNTIL = time(9, 15)  # skip first 15 min after MCX open
 
 
 def now_ist() -> datetime:
@@ -25,6 +31,14 @@ def is_market_open() -> bool:
     return MARKET_OPEN <= current_time <= MARKET_CLOSE
 
 
+def is_mcx_open() -> bool:
+    """Check if MCX agri session is open (9:00 AM – 9:00 PM IST, Mon–Fri)."""
+    now = now_ist()
+    if now.weekday() >= 5:
+        return False
+    return MCX_OPEN <= now.time() <= MCX_CLOSE
+
+
 def is_pre_market() -> bool:
     """Check if we're in pre-market session (9:00 – 9:15 IST)."""
     now = now_ist()
@@ -34,11 +48,16 @@ def is_pre_market() -> bool:
     return PRE_MARKET_START <= current_time < MARKET_OPEN
 
 
-def is_signal_allowed() -> bool:
-    """No signals in first 15 min of market (9:15–9:30)."""
-    now = now_ist()
-    current_time = now.time()
-    return is_market_open() and current_time >= NO_SIGNAL_UNTIL
+def is_signal_allowed(exchange: str = "NSE") -> bool:
+    """Gate signals by exchange session.
+
+    MCX: 9:15 AM – 9:00 PM IST (agri commodities).
+    NSE: 9:30 AM – 3:30 PM IST.
+    """
+    t = now_ist().time()
+    if exchange == "MCX":
+        return is_mcx_open() and t >= MCX_NO_SIGNAL_UNTIL
+    return is_market_open() and t >= NO_SIGNAL_UNTIL
 
 
 def minutes_to_close() -> int:
