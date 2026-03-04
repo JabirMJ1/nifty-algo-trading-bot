@@ -56,19 +56,27 @@ class JobRunner:
             name="Market Open Reset",
         )
 
-        # Market close (15:30 IST) — close all positions
+        # NSE market close (15:30 IST) — close NSE positions only
         self.scheduler.add_job(
-            self._on_market_close,
+            self._on_nse_close,
             CronTrigger(hour=15, minute=30, day_of_week="mon-fri", timezone=IST),
             id="market_close",
-            name="Market Close",
+            name="NSE Market Close",
         )
 
-        # EOD report (15:35 IST)
+        # MCX market close (21:00 IST) — close MCX positions
+        self.scheduler.add_job(
+            self._on_mcx_close,
+            CronTrigger(hour=21, minute=0, day_of_week="mon-fri", timezone=IST),
+            id="mcx_close",
+            name="MCX Market Close",
+        )
+
+        # EOD report (21:05 IST) — after MCX close, covers full day
         if self._reporter:
             self.scheduler.add_job(
                 self._reporter.send_eod_report,
-                CronTrigger(hour=15, minute=35, day_of_week="mon-fri", timezone=IST),
+                CronTrigger(hour=21, minute=5, day_of_week="mon-fri", timezone=IST),
                 id="eod_report",
                 name="EOD Report",
             )
@@ -122,23 +130,38 @@ class JobRunner:
             {"type": "MARKET_OPEN", "message": "Market is now open. Trading active."},
         )
 
-    async def _on_market_close(self):
-        """Actions at market close — close all positions."""
-        log.info("=== MARKET CLOSE ===")
+    async def _on_nse_close(self):
+        """Actions at NSE market close (15:30 IST) — close NSE positions only."""
+        log.info("=== NSE MARKET CLOSE ===")
 
-        # Close all open positions
         if self._trader:
-            await self._trader.close_all_positions("EOD_CLOSE")
+            await self._trader.close_all_positions("EOD_CLOSE", exchange="NSE")
         if self._order_manager:
-            await self._order_manager.close_all_positions("EOD_CLOSE")
+            await self._order_manager.close_all_positions("EOD_CLOSE", exchange="NSE")
 
-        # Force close building candles
         if self._candle_builder:
-            await self._candle_builder.force_close_all()
+            await self._candle_builder.force_close_all(exchange="NSE")
 
         await event_bus.publish(
             EventType.ALERT,
-            {"type": "MARKET_CLOSE", "message": "Market closed. All positions squared off."},
+            {"type": "MARKET_CLOSE", "message": "NSE market closed. NSE positions squared off. MCX continues."},
+        )
+
+    async def _on_mcx_close(self):
+        """Actions at MCX market close (21:00 IST) — close MCX positions."""
+        log.info("=== MCX MARKET CLOSE ===")
+
+        if self._trader:
+            await self._trader.close_all_positions("EOD_CLOSE", exchange="MCX")
+        if self._order_manager:
+            await self._order_manager.close_all_positions("EOD_CLOSE", exchange="MCX")
+
+        if self._candle_builder:
+            await self._candle_builder.force_close_all(exchange="MCX")
+
+        await event_bus.publish(
+            EventType.ALERT,
+            {"type": "MCX_CLOSE", "message": "MCX market closed. All MCX positions squared off."},
         )
 
     async def _pre_market_check(self):

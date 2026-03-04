@@ -250,9 +250,11 @@ class PaperTrader:
         exchange = turnover * (settings.EXCHANGE_CHARGES_PCT / 100)
         return brokerage + stt + exchange
 
-    async def close_all_positions(self, reason: str = "EOD_CLOSE"):
-        """Close all open positions (e.g., at market close)."""
+    async def close_all_positions(self, reason: str = "EOD_CLOSE", exchange: str = None):
+        """Close all open positions, optionally filtered by exchange (e.g. 'NSE' or 'MCX')."""
         for symbol in list(self.positions.keys()):
+            if exchange and not symbol.startswith(f"{exchange}:"):
+                continue
             # Use last known price from candle history
             candles = self._candle_history.get(symbol, [])
             if candles:

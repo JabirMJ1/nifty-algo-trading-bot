@@ -293,9 +293,11 @@ class OrderManager:
             {"type": "EXIT", "instrument": symbol, "pnl": pnl, "reason": reason},
         )
 
-    async def close_all_positions(self, reason: str = "EOD_CLOSE"):
-        """Close all open positions."""
+    async def close_all_positions(self, reason: str = "EOD_CLOSE", exchange: str = None):
+        """Close all open positions, optionally filtered by exchange (e.g. 'NSE' or 'MCX')."""
         for symbol in list(self.positions.keys()):
+            if exchange and not symbol.startswith(f"{exchange}:"):
+                continue
             await self._close_position_market(symbol, reason)
 
     def start(self):

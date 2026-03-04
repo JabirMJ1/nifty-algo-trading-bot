@@ -78,12 +78,16 @@ class CandleBuilder:
         )
         await event_bus.publish(EventType.CANDLE, candle)
 
-    async def force_close_all(self):
-        """Force-close all building candles (e.g., at market close)."""
+    async def force_close_all(self, exchange: str = None):
+        """Force-close all building candles, optionally filtered by exchange."""
         for symbol, candle in list(self._candles.items()):
+            if exchange and not symbol.startswith(f"{exchange}:"):
+                continue
             await self._emit_candle(candle)
-        self._candles.clear()
-        log.info("All building candles force-closed")
+            del self._candles[symbol]
+        if not exchange:
+            self._candles.clear()
+        log.info(f"Building candles force-closed ({exchange or 'all'})")
 
     async def warmup(self, kite, instrument_tokens: Dict[str, int]):
         """Fetch today's historical candles and publish as warmup CANDLE events.
