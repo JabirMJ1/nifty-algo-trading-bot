@@ -223,71 +223,51 @@ class TestHealthCheckMarketHours:
         """Pre-market (8:00 AM IST): no alarm even with no ticks."""
         from modules.monitor.health_check import HealthCheck
         check = HealthCheck()
-
-        with patch("modules.monitor.health_check.now_ist", return_value=self._ist(8, 0)):
-            result = check._check_websocket(datetime.utcnow())
-
+        result = check._check_websocket(self._ist(8, 0))
         assert result is True
 
     def test_no_alarm_early_morning(self):
         """Very early morning (6:00 AM IST): no alarm."""
         from modules.monitor.health_check import HealthCheck
         check = HealthCheck()
-
-        with patch("modules.monitor.health_check.now_ist", return_value=self._ist(6, 0)):
-            result = check._check_websocket(datetime.utcnow())
-
+        result = check._check_websocket(self._ist(6, 0))
         assert result is True
 
     def test_alarm_during_nse_hours(self):
         """During market hours (10:00 AM IST) with no ticks → should alarm."""
         from modules.monitor.health_check import HealthCheck
         check = HealthCheck()  # _last_tick_time is None
-
-        with patch("modules.monitor.health_check.now_ist", return_value=self._ist(10, 0)):
-            result = check._check_websocket(datetime.utcnow())
-
+        result = check._check_websocket(self._ist(10, 0))
         assert result is False
 
     def test_alarm_during_mcx_evening(self):
         """During MCX evening session (7:00 PM IST) with no ticks → should alarm."""
         from modules.monitor.health_check import HealthCheck
         check = HealthCheck()
-
-        with patch("modules.monitor.health_check.now_ist", return_value=self._ist(19, 0)):
-            result = check._check_websocket(datetime.utcnow())
-
+        result = check._check_websocket(self._ist(19, 0))
         assert result is False
 
     def test_no_alarm_after_mcx_close(self):
         """After all markets close (11:35 PM IST): no alarm."""
         from modules.monitor.health_check import HealthCheck
         check = HealthCheck()
-
-        with patch("modules.monitor.health_check.now_ist", return_value=self._ist(23, 35)):
-            result = check._check_websocket(datetime.utcnow())
-
+        result = check._check_websocket(self._ist(23, 35))
         assert result is True
 
     def test_boundary_exactly_9am(self):
         """Exactly at 9:00 AM IST — market hours begin, alarms active."""
         from modules.monitor.health_check import HealthCheck
         check = HealthCheck()
-
-        with patch("modules.monitor.health_check.now_ist", return_value=self._ist(9, 0)):
-            result = check._check_websocket(datetime.utcnow())
-
+        result = check._check_websocket(self._ist(9, 0))
         assert result is False  # Market hours started, no ticks → alarm
 
     def test_tick_within_60s_returns_healthy(self):
         """During market hours, a recent tick should return True (healthy)."""
         from modules.monitor.health_check import HealthCheck
         check = HealthCheck()
-        check._last_tick_time = datetime.utcnow()  # Just received a tick
-
-        with patch("modules.monitor.health_check.now_ist", return_value=self._ist(11, 0)):
-            result = check._check_websocket(datetime.utcnow())
-
+        now = self._ist(11, 0)
+        check._last_tick_time = now  # Just received a tick
+        result = check._check_websocket(now)
         assert result is True
 
 

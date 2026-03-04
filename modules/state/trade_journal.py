@@ -79,61 +79,59 @@ class TradeJournal:
 
     def _record_entry(self, data: Dict[str, Any]):
         try:
-            session = self.SessionLocal()
-            record = TradeRecord(
-                trade_id=data.get("order_id", ""),
-                instrument=data["instrument"],
-                direction=data["direction"],
-                entry_price=data["price"],
-                quantity=data["quantity"],
-                entry_time=datetime.utcnow(),
-                strategy=data.get("strategy", ""),
-                stop_loss=data.get("stop_loss", 0),
-                target=data.get("target", 0),
-            )
-            session.add(record)
-            session.commit()
-            session.close()
+            with self.SessionLocal() as session:
+                record = TradeRecord(
+                    trade_id=data.get("order_id", ""),
+                    instrument=data["instrument"],
+                    direction=data["direction"],
+                    entry_price=data["price"],
+                    quantity=data["quantity"],
+                    entry_time=datetime.utcnow(),
+                    strategy=data.get("strategy", ""),
+                    stop_loss=data.get("stop_loss", 0),
+                    target=data.get("target", 0),
+                )
+                session.add(record)
+                session.commit()
             log.debug(f"Trade entry recorded: {data.get('order_id')}")
         except Exception as e:
             log.error(f"Failed to record trade entry: {e}")
 
     def _record_exit(self, trade: Dict[str, Any]):
         try:
-            session = self.SessionLocal()
-            record = (
-                session.query(TradeRecord)
-                .filter_by(trade_id=trade.get("trade_id", ""))
-                .first()
-            )
-            if record:
-                record.exit_price = trade.get("exit_price", 0)
-                record.exit_time = datetime.utcnow()
-                record.pnl = trade.get("pnl", 0)
-                record.costs = trade.get("costs", 0)
-                record.exit_reason = trade.get("exit_reason", "")
-                session.commit()
-            else:
-                # No entry record found — create a complete record
-                record = TradeRecord(
-                    trade_id=trade.get("trade_id", ""),
-                    instrument=trade.get("instrument", ""),
-                    direction=trade.get("direction", ""),
-                    entry_price=trade.get("entry_price", 0),
-                    exit_price=trade.get("exit_price", 0),
-                    quantity=trade.get("quantity", 0),
-                    pnl=trade.get("pnl", 0),
-                    costs=trade.get("costs", 0),
-                    entry_time=datetime.fromisoformat(trade["entry_time"])
-                    if trade.get("entry_time")
-                    else datetime.utcnow(),
-                    exit_time=datetime.utcnow(),
-                    strategy=trade.get("strategy", ""),
-                    exit_reason=trade.get("exit_reason", ""),
+            with self.SessionLocal() as session:
+                record = (
+                    session.query(TradeRecord)
+                    .filter_by(trade_id=trade.get("trade_id", ""))
+                    .first()
                 )
-                session.add(record)
-                session.commit()
-            session.close()
+                if record:
+                    record.exit_price = trade.get("exit_price", 0)
+                    record.exit_time = datetime.utcnow()
+                    record.pnl = trade.get("pnl", 0)
+                    record.costs = trade.get("costs", 0)
+                    record.exit_reason = trade.get("exit_reason", "")
+                    session.commit()
+                else:
+                    # No entry record found — create a complete record
+                    record = TradeRecord(
+                        trade_id=trade.get("trade_id", ""),
+                        instrument=trade.get("instrument", ""),
+                        direction=trade.get("direction", ""),
+                        entry_price=trade.get("entry_price", 0),
+                        exit_price=trade.get("exit_price", 0),
+                        quantity=trade.get("quantity", 0),
+                        pnl=trade.get("pnl", 0),
+                        costs=trade.get("costs", 0),
+                        entry_time=datetime.fromisoformat(trade["entry_time"])
+                        if trade.get("entry_time")
+                        else datetime.utcnow(),
+                        exit_time=datetime.utcnow(),
+                        strategy=trade.get("strategy", ""),
+                        exit_reason=trade.get("exit_reason", ""),
+                    )
+                    session.add(record)
+                    session.commit()
             log.debug(f"Trade exit recorded: {trade.get('trade_id')}")
         except Exception as e:
             log.error(f"Failed to record trade exit: {e}")
@@ -143,29 +141,27 @@ class TradeJournal:
         if not self._initialized:
             return []
         try:
-            session = self.SessionLocal()
-            today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            records = (
-                session.query(TradeRecord)
-                .filter(TradeRecord.entry_time >= today)
-                .all()
-            )
-            trades = [
-                {
-                    "trade_id": r.trade_id,
-                    "instrument": r.instrument,
-                    "direction": r.direction,
-                    "entry_price": r.entry_price,
-                    "exit_price": r.exit_price,
-                    "quantity": r.quantity,
-                    "pnl": r.pnl,
-                    "costs": r.costs,
-                    "exit_reason": r.exit_reason,
-                }
-                for r in records
-            ]
-            session.close()
-            return trades
+            with self.SessionLocal() as session:
+                today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+                records = (
+                    session.query(TradeRecord)
+                    .filter(TradeRecord.entry_time >= today)
+                    .all()
+                )
+                return [
+                    {
+                        "trade_id": r.trade_id,
+                        "instrument": r.instrument,
+                        "direction": r.direction,
+                        "entry_price": r.entry_price,
+                        "exit_price": r.exit_price,
+                        "quantity": r.quantity,
+                        "pnl": r.pnl,
+                        "costs": r.costs,
+                        "exit_reason": r.exit_reason,
+                    }
+                    for r in records
+                ]
         except Exception as e:
             log.error(f"Failed to fetch today's trades: {e}")
             return []

@@ -2,7 +2,7 @@
 
 from typing import List
 from pydantic_settings import BaseSettings
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 
 
 class Settings(BaseSettings):
@@ -70,6 +70,23 @@ class Settings(BaseSettings):
     BROKERAGE_PER_ORDER: float = 20.0  # rupees
     STT_PCT: float = 0.05
     EXCHANGE_CHARGES_PCT: float = 0.0019
+
+    @model_validator(mode="after")
+    def _check_live_credentials(self) -> "Settings":
+        if not self.PAPER_TRADE:
+            missing = [
+                name for name, val in [
+                    ("KITE_API_KEY", self.KITE_API_KEY),
+                    ("KITE_API_SECRET", self.KITE_API_SECRET),
+                    ("KITE_ACCESS_TOKEN", self.KITE_ACCESS_TOKEN),
+                ]
+                if not val
+            ]
+            if missing:
+                raise ValueError(
+                    f"Live trading requires these env vars to be set: {', '.join(missing)}"
+                )
+        return self
 
     @property
     def instruments_list(self) -> list:

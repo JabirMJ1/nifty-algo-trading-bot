@@ -1,0 +1,13 @@
+# Install on top of requirements.txt for local backtesting and analysis.
+# NOT included in the production Docker image.
+#
+#   pip install -r requirements.txt -r requirements-backtest.txt
+#
+# Then run:
+#   python run_backtest.py
+#   python analyze_first_hour.py
+
+pandas==2.1.4
+numpy==1.26.3
+vectorbt==0.26.2
+pyarrow==14.0.2
