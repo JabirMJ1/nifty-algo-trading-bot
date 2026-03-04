@@ -11,9 +11,9 @@ MARKET_CLOSE = time(15, 30)
 PRE_MARKET_START = time(9, 0)
 NO_SIGNAL_UNTIL = time(9, 30)  # skip first 15 min (opening volatility)
 
-# MCX — agri commodities (GOLDPETAL etc.) trade 9:00 AM – 9:00 PM IST
+# MCX — bullion/energy commodities (GOLDPETAL, GOLD, SILVER, CRUDEOIL etc.) trade 9:00 AM – 11:30 PM IST
 MCX_OPEN = time(9, 0)
-MCX_CLOSE = time(21, 0)
+MCX_CLOSE = time(23, 30)
 MCX_NO_SIGNAL_UNTIL = time(9, 15)  # skip first 15 min after MCX open
 
 
@@ -32,7 +32,7 @@ def is_market_open() -> bool:
 
 
 def is_mcx_open() -> bool:
-    """Check if MCX agri session is open (9:00 AM – 9:00 PM IST, Mon–Fri)."""
+    """Check if MCX session is open (9:00 AM – 11:30 PM IST, Mon–Fri)."""
     now = now_ist()
     if now.weekday() >= 5:
         return False
@@ -51,7 +51,7 @@ def is_pre_market() -> bool:
 def is_signal_allowed(exchange: str = "NSE") -> bool:
     """Gate signals by exchange session.
 
-    MCX: 9:15 AM – 9:00 PM IST (agri commodities).
+    MCX: 9:15 AM – 11:30 PM IST (bullion/energy commodities).
     NSE: 9:30 AM – 3:30 PM IST.
     """
     t = now_ist().time()

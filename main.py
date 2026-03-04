@@ -20,6 +20,7 @@ from modules.sensory.candle_builder import CandleBuilder
 from modules.sensory.news_sentiment import NewsSentimentFeed
 from modules.strategy.adaptive_strategy import AdaptiveStrategy
 from modules.strategy.straddle_920 import Straddle920Strategy
+from modules.strategy.straddle_validator import StraddleValidator
 from modules.risk.position_sizer import PositionSizer
 from modules.risk.stop_manager import StopManager
 from modules.risk.circuit_breaker import CircuitBreaker
@@ -49,6 +50,7 @@ class TradingBot:
         self.candle_builder = CandleBuilder()
         self.strategy = AdaptiveStrategy()
         self.straddle = Straddle920Strategy()
+        self.straddle_validator: Optional[StraddleValidator] = None
         self.position_sizer = PositionSizer()
         self.stop_manager = StopManager()
         self.circuit_breaker: Optional[CircuitBreaker] = None
@@ -123,6 +125,9 @@ class TradingBot:
         if settings.NEWS_SENTIMENT_ENABLED:
             self.news_feed = NewsSentimentFeed()
 
+        # Straddle validator — always enabled (records real vs model premiums)
+        self.straddle_validator = StraddleValidator(kite=self.kite_feed.get_kite())
+
         # Scheduler
         self.scheduler = JobRunner(
             health_check=self.health_check,
@@ -134,6 +139,7 @@ class TradingBot:
             kite_feed=self.kite_feed,
             straddle_strategy=self.straddle,
             news_feed=self.news_feed,
+            straddle_validator=self.straddle_validator,
         )
 
     def _start_modules(self):

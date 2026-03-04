@@ -24,6 +24,7 @@ class JobRunner:
         kite_feed=None,
         straddle_strategy=None,
         news_feed=None,
+        straddle_validator=None,
     ):
         self.scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
         self._health = health_check
@@ -35,6 +36,7 @@ class JobRunner:
         self._kite_feed = kite_feed
         self._straddle = straddle_strategy
         self._news_feed = news_feed
+        self._straddle_validator = straddle_validator
 
     def setup_jobs(self):
         """Configure all scheduled jobs."""
@@ -66,19 +68,19 @@ class JobRunner:
             name="NSE Market Close",
         )
 
-        # MCX market close (21:00 IST) — close MCX positions
+        # MCX market close (23:30 IST) — close MCX positions
         self.scheduler.add_job(
             self._on_mcx_close,
-            CronTrigger(hour=21, minute=0, day_of_week="mon-fri", timezone=IST),
+            CronTrigger(hour=23, minute=30, day_of_week="mon-fri", timezone=IST),
             id="mcx_close",
             name="MCX Market Close",
         )
 
-        # EOD report (21:05 IST) — after MCX close, covers full day
+        # EOD report (23:35 IST) — after MCX close, covers full day
         if self._reporter:
             self.scheduler.add_job(
                 self._reporter.send_eod_report,
-                CronTrigger(hour=21, minute=5, day_of_week="mon-fri", timezone=IST),
+                CronTrigger(hour=23, minute=35, day_of_week="mon-fri", timezone=IST),
                 id="eod_report",
                 name="EOD Report",
             )
@@ -117,6 +119,15 @@ class JobRunner:
                 name="3:10 Straddle Exit",
             )
 
+        # 3:15 Straddle validation exit snapshot (independent of straddle_strategy)
+        if self._straddle_validator:
+            self.scheduler.add_job(
+                self._on_straddle_validation_exit,
+                CronTrigger(hour=15, minute=15, day_of_week="mon-fri", timezone=IST),
+                id="straddle_validation_exit",
+                name="3:15 Straddle Validation Exit",
+            )
+
         log.info("All scheduled jobs configured")
 
     async def _on_market_open(self):
@@ -150,7 +161,7 @@ class JobRunner:
         )
 
     async def _on_mcx_close(self):
-        """Actions at MCX market close (21:00 IST) — close MCX positions, upload sentiment log."""
+        """Actions at MCX market close (23:30 IST) — close MCX positions, upload sentiment log."""
         log.info("=== MCX MARKET CLOSE ===")
 
         if self._trader:
@@ -232,6 +243,14 @@ class JobRunner:
             EventType.ALERT,
             {"type": "STRADDLE_ENTRY", "message": "9:20 AM — Straddle entry triggered."},
         )
+        if self._straddle_validator:
+            await self._straddle_validator.record_entry()
+
+    async def _on_straddle_validation_exit(self):
+        """3:15 PM — record EOD option prices for validation."""
+        log.info("=== 3:15 STRADDLE VALIDATION EXIT ===")
+        if self._straddle_validator:
+            await self._straddle_validator.record_exit()
 
     async def _on_straddle_exit(self):
         """Trigger 3:10 straddle exit."""

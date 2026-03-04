@@ -146,9 +146,9 @@ class TestIsSignalAllowed:
         with self._patch_time(17, 30):
             assert is_signal_allowed("MCX") is True
 
-    def test_mcx_blocked_after_2100(self):
+    def test_mcx_blocked_after_2330(self):
         from modules.sensory.market_hours import is_signal_allowed
-        with self._patch_time(21, 5):
+        with self._patch_time(23, 35):
             assert is_signal_allowed("MCX") is False
 
     def test_nse_blocked_after_1530(self):
@@ -196,15 +196,15 @@ class TestSchedulerJobs:
         assert fields["hour"] == "15"
         assert fields["minute"] == "30"
 
-    def test_mcx_close_at_2100(self):
+    def test_mcx_close_at_2330(self):
         trigger = self._job_trigger(self.runner, "mcx_close")
         fields = self._cron_fields(trigger)
-        assert fields["hour"] == "21"
-        assert fields["minute"] == "0"
+        assert fields["hour"] == "23"
+        assert fields["minute"] == "30"
 
     def test_eod_report_after_mcx_close(self):
         """EOD report must fire after MCX closes, not at 15:35."""
         trigger = self._job_trigger(self.runner, "eod_report")
         fields = self._cron_fields(trigger)
-        assert fields["hour"] == "21"
+        assert fields["hour"] == "23"
         assert int(fields["minute"]) >= 1  # at least 1 min after MCX close
