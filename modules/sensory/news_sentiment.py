@@ -107,6 +107,9 @@ class NewsSentimentFeed:
             log.warning("ANTHROPIC_API_KEY not set — news sentiment disabled")
             return
 
+        # Upload any previous day's file that was missed (e.g. server restarted before 21:00)
+        await self._backfill_missed_uploads()
+
         self._running = True
         asyncio.create_task(self._news_loop())
         log.info(
@@ -375,6 +378,24 @@ class NewsSentimentFeed:
             f"commodity={self._last_commodity_score:+.2f}/{self._last_commodity_magnitude:.2f} "
             f"headlines={len(headlines)} | {self._last_summary}"
         )
+
+    async def _backfill_missed_uploads(self):
+        """On startup, upload any sentiment JSONL files that weren't uploaded yet.
+
+        Covers the case where the server was restarted before the 21:00 MCX close job fired.
+        Only uploads files older than today — today's file is still being written.
+        """
+        if not settings.S3_BUCKET:
+            return
+        today = now_ist().strftime("%Y-%m-%d")
+        try:
+            for path in sorted(_LOGS_DIR.glob("sentiment_*.jsonl")):
+                date_str = path.stem.replace("sentiment_", "")
+                if date_str < today:
+                    log.info(f"Backfilling missed S3 upload for {date_str}")
+                    await self.upload_to_s3(date_str)
+        except Exception as e:
+            log.warning(f"Backfill check failed: {e}")
 
     async def upload_to_s3(self, date_str: str = None) -> bool:
         """Upload today's sentiment JSONL to S3. No-op if S3_BUCKET not configured.
