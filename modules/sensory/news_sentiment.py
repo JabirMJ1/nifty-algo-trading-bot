@@ -10,7 +10,9 @@ Sources (fetched in parallel):
 
 import asyncio
 import json
+import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import aiohttp
 import anthropic
@@ -22,6 +24,12 @@ from core.logger import get_logger
 from modules.sensory.market_hours import now_ist
 
 log = get_logger("news_sentiment")
+
+_LOGS_DIR = Path("logs")
+
+
+def _sentiment_log_path(date_str: str) -> Path:
+    return _LOGS_DIR / f"sentiment_{date_str}.jsonl"
 
 # IST offset
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -325,6 +333,25 @@ class NewsSentimentFeed:
 
         ts = now_ist()
 
+        # Persist headlines + scores to daily JSONL (crash-safe, no in-memory accumulation)
+        record = {
+            "timestamp": ts.isoformat(),
+            "headlines": headlines,
+            "equity_score": self._last_equity_score,
+            "equity_magnitude": self._last_equity_magnitude,
+            "commodity_score": self._last_commodity_score,
+            "commodity_magnitude": self._last_commodity_magnitude,
+            "headline_count": len(headlines),
+            "summary": self._last_summary,
+        }
+        try:
+            _LOGS_DIR.mkdir(exist_ok=True)
+            log_path = _sentiment_log_path(ts.strftime("%Y-%m-%d"))
+            with open(log_path, "a") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as e:
+            log.warning(f"Failed to write sentiment log: {e}")
+
         await event_bus.publish(EventType.SENTIMENT, {
             "symbol": "EQUITY",
             "score": self._last_equity_score,
@@ -348,6 +375,42 @@ class NewsSentimentFeed:
             f"commodity={self._last_commodity_score:+.2f}/{self._last_commodity_magnitude:.2f} "
             f"headlines={len(headlines)} | {self._last_summary}"
         )
+
+    async def upload_to_s3(self, date_str: str = None) -> bool:
+        """Upload today's sentiment JSONL to S3. No-op if S3_BUCKET not configured.
+
+        Uses the AWS CLI (already on EC2) so no boto3 dependency needed.
+        Returns True on success, False on failure/skip.
+        """
+        if not settings.S3_BUCKET:
+            log.debug("S3_BUCKET not set — skipping sentiment upload")
+            return False
+
+        if date_str is None:
+            date_str = now_ist().strftime("%Y-%m-%d")
+
+        local_path = _sentiment_log_path(date_str)
+        if not local_path.exists():
+            log.warning(f"Sentiment log not found for {date_str} — nothing to upload")
+            return False
+
+        s3_key = f"s3://{settings.S3_BUCKET}/sentiment/sentiment_{date_str}.jsonl"
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "aws", "s3", "cp", str(local_path), s3_key,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                log.info(f"Sentiment log uploaded: {s3_key}")
+                return True
+            else:
+                log.warning(f"S3 upload failed: {stderr.decode().strip()}")
+                return False
+        except Exception as e:
+            log.warning(f"S3 upload error: {e}")
+            return False
 
     async def test_fetch(self):
         """Standalone test — call directly to verify API connectivity."""

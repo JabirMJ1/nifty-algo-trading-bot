@@ -23,6 +23,7 @@ class JobRunner:
         candle_builder=None,
         kite_feed=None,
         straddle_strategy=None,
+        news_feed=None,
     ):
         self.scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
         self._health = health_check
@@ -33,6 +34,7 @@ class JobRunner:
         self._candle_builder = candle_builder
         self._kite_feed = kite_feed
         self._straddle = straddle_strategy
+        self._news_feed = news_feed
 
     def setup_jobs(self):
         """Configure all scheduled jobs."""
@@ -148,7 +150,7 @@ class JobRunner:
         )
 
     async def _on_mcx_close(self):
-        """Actions at MCX market close (21:00 IST) — close MCX positions."""
+        """Actions at MCX market close (21:00 IST) — close MCX positions, upload sentiment log."""
         log.info("=== MCX MARKET CLOSE ===")
 
         if self._trader:
@@ -158,6 +160,10 @@ class JobRunner:
 
         if self._candle_builder:
             await self._candle_builder.force_close_all(exchange="MCX")
+
+        # Upload today's sentiment + headlines log to S3
+        if self._news_feed:
+            await self._news_feed.upload_to_s3()
 
         await event_bus.publish(
             EventType.ALERT,

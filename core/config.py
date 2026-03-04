@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # Historical sentiment (backtesting)
     ALPHAVANTAGE_API_KEY: str = ""
 
+    # S3 — EOD data archive (optional)
+    S3_BUCKET: str = ""   # e.g. "my-trading-bot-data"; leave empty to disable
+
     # Options — directional buying (CE/PE)
     TRADE_OPTIONS: bool = False        # True → use OptionsDirectionalBuyer instead of futures
     OPTIONS_LOT_SIZE: int = 75         # Nifty weekly lot size

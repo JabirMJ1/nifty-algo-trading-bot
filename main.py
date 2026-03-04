@@ -133,6 +133,7 @@ class TradingBot:
             candle_builder=self.candle_builder,
             kite_feed=self.kite_feed,
             straddle_strategy=self.straddle,
+            news_feed=self.news_feed,
         )
 
     def _start_modules(self):
