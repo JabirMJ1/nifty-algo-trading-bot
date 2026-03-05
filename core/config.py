@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     MAX_DAILY_LOSS_PCT: float = 2.0
     RISK_PER_TRADE_PCT: float = 1.0
     MAX_OPEN_POSITIONS: int = 3
+    # Futures margin as % of contract value (SEBI SPAN+Exposure).
+    # MCX Gold/Goldpetal ~17%, Nifty Futures ~15%. Conservative default: 20%.
+    MARGIN_PCT: float = 20.0
 
     # Instruments (comma-separated in .env)
     INSTRUMENTS: str = "NSE:NIFTY25FEBFUT"

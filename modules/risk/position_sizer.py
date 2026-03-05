@@ -47,10 +47,13 @@ class PositionSizer:
         atr: float,
         current_open_positions: int,
         lot_size: int = 1,
+        price: float = 0.0,
     ) -> int:
         """Calculate position size (number of lots).
 
         Formula: size = (capital * risk_pct) / (ATR * lot_multiplier)
+        Then capped so that margin required ≤ available capital.
+        Margin per lot = price × lot_size × MARGIN_PCT%
         """
         if current_open_positions >= self.max_positions:
             log.warning(
@@ -67,6 +70,21 @@ class PositionSizer:
 
         # Round down to nearest lot
         lots = max(1, int(raw_size / lot_size)) if raw_size >= lot_size else 0
+
+        # Cap by margin: don't request more margin than we have
+        if price > 0 and lot_size > 0:
+            margin_per_lot = price * lot_size * (settings.MARGIN_PCT / 100)
+            if margin_per_lot > 0:
+                max_lots_by_margin = int(self.capital / margin_per_lot)
+                if lots > max_lots_by_margin:
+                    log.warning(
+                        f"Capping lots {lots} → {max_lots_by_margin} "
+                        f"(margin_per_lot={margin_per_lot:.0f}, capital={self.capital})"
+                    )
+                    lots = max_lots_by_margin
+
+        if lots == 0:
+            log.warning("Position size is 0 after margin cap — insufficient capital for 1 lot.")
 
         log.info(
             f"Position sizing: capital={self.capital}, risk={risk_amount:.2f}, "

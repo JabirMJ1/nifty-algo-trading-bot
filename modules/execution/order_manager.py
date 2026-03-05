@@ -64,7 +64,9 @@ class OrderManager:
             return
 
         quantity = self.sizer.calculate_size(
-            atr=atr, current_open_positions=len(self.positions)
+            atr=atr,
+            current_open_positions=len(self.positions),
+            price=signal_data.get("price", 0.0),
         )
         if quantity <= 0:
             return

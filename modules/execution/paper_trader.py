@@ -114,6 +114,7 @@ class PaperTrader:
         quantity = self.sizer.calculate_size(
             atr=atr,
             current_open_positions=len(self.positions),
+            price=signal.get("price", base_price),
         )
         if quantity <= 0:
             log.warning(f"Position sizer returned 0 for {symbol}. Skipping.")
