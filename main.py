@@ -83,22 +83,33 @@ class TradingBot:
         # Risk modules
         self.circuit_breaker = CircuitBreaker(redis_client=self._redis)
 
-        # Execution — paper trade or live
-        if settings.PAPER_TRADE:
-            self.paper_trader = PaperTrader(
-                position_sizer=self.position_sizer,
-                stop_manager=self.stop_manager,
-                circuit_breaker=self.circuit_breaker,
-            )
-            log.info("Mode: PAPER TRADING")
+        # Execution — options mode replaces futures; don't create both
+        if not settings.TRADE_OPTIONS:
+            if settings.PAPER_TRADE:
+                self.paper_trader = PaperTrader(
+                    position_sizer=self.position_sizer,
+                    stop_manager=self.stop_manager,
+                    circuit_breaker=self.circuit_breaker,
+                )
+                log.info("Mode: PAPER TRADING (futures)")
+            else:
+                self.order_manager = OrderManager(
+                    kite=self.kite_feed.get_kite(),
+                    position_sizer=self.position_sizer,
+                    stop_manager=self.stop_manager,
+                    circuit_breaker=self.circuit_breaker,
+                )
+                log.info("Mode: LIVE TRADING (futures)")
         else:
-            self.order_manager = OrderManager(
-                kite=self.kite_feed.get_kite(),
-                position_sizer=self.position_sizer,
-                stop_manager=self.stop_manager,
+            log.info("Mode: OPTIONS DIRECTIONAL BUYING (futures executor disabled)")
+
+        # Options directional buyer — created before pnl_reporter so it can be passed in
+        if settings.TRADE_OPTIONS:
+            self.options_buyer = OptionsDirectionalBuyer(
+                kite=self.kite_feed.get_kite() if not settings.PAPER_TRADE else None,
                 circuit_breaker=self.circuit_breaker,
             )
-            log.info("Mode: LIVE TRADING")
+            log.info("Options mode: DIRECTIONAL BUYING (CE/PE)")
 
         # State
         self.position_tracker = PositionTracker(redis_client=self._redis)
@@ -111,15 +122,8 @@ class TradingBot:
             trade_journal=self.trade_journal,
             circuit_breaker=self.circuit_breaker,
             paper_trader=self.paper_trader,
+            options_buyer=self.options_buyer,
         )
-
-        # Options directional buyer
-        if settings.TRADE_OPTIONS:
-            self.options_buyer = OptionsDirectionalBuyer(
-                kite=self.kite_feed.get_kite() if not settings.PAPER_TRADE else None,
-                circuit_breaker=self.circuit_breaker,
-            )
-            log.info("Options mode: DIRECTIONAL BUYING (CE/PE)")
 
         # News sentiment
         if settings.NEWS_SENTIMENT_ENABLED:
@@ -135,6 +139,7 @@ class TradingBot:
             pnl_reporter=self.pnl_reporter,
             paper_trader=self.paper_trader,
             order_manager=self.order_manager,
+            options_buyer=self.options_buyer,
             candle_builder=self.candle_builder,
             kite_feed=self.kite_feed,
             straddle_strategy=self.straddle,

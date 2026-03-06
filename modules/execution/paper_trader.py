@@ -110,11 +110,18 @@ class PaperTrader:
             log.warning(f"ATR is zero for {symbol}. Cannot execute.")
             return
 
+        # Margin already locked in existing open positions
+        deployed_margin = sum(
+            pos["entry_price"] * pos["quantity"] * (settings.MARGIN_PCT / 100)
+            for pos in self.positions.values()
+        )
+
         # Position sizing
         quantity = self.sizer.calculate_size(
             atr=atr,
             current_open_positions=len(self.positions),
             price=signal.get("price", base_price),
+            deployed_margin=deployed_margin,
         )
         if quantity <= 0:
             log.warning(f"Position sizer returned 0 for {symbol}. Skipping.")
@@ -264,11 +271,17 @@ class PaperTrader:
                 price = self.positions[symbol]["entry_price"]
             await self._close_position(symbol, price, reason)
 
+    async def on_kill_switch(self, data: Dict[str, Any]):
+        """Force-close all positions when circuit breaker fires."""
+        log.warning(f"KILL_SWITCH received — force-closing all positions | reason={data}")
+        await self.close_all_positions("KILL_SWITCH")
+
     def start(self):
         """Subscribe to relevant events."""
         event_bus.subscribe(EventType.SIGNAL, self.on_signal)
         event_bus.subscribe(EventType.CANDLE, self.on_candle)
         event_bus.subscribe(EventType.TICK, self.on_tick)
+        event_bus.subscribe(EventType.KILL_SWITCH, self.on_kill_switch)
         log.info(f"Paper trader started | balance={self.balance:.2f}")
 
     def get_status(self) -> Dict[str, Any]:

@@ -48,12 +48,14 @@ class PositionSizer:
         current_open_positions: int,
         lot_size: int = 1,
         price: float = 0.0,
+        deployed_margin: float = 0.0,
     ) -> int:
         """Calculate position size (number of lots).
 
         Formula: size = (capital * risk_pct) / (ATR * lot_multiplier)
         Then capped so that margin required ≤ available capital.
         Margin per lot = price × lot_size × MARGIN_PCT%
+        deployed_margin: margin already locked in open positions (subtracted from capital cap).
         """
         if current_open_positions >= self.max_positions:
             log.warning(
@@ -71,15 +73,18 @@ class PositionSizer:
         # Round down to nearest lot
         lots = max(1, int(raw_size / lot_size)) if raw_size >= lot_size else 0
 
-        # Cap by margin: don't request more margin than we have
+        # Cap by available capital (total minus already-deployed margin)
+        available_capital = max(0.0, self.capital - deployed_margin)
         if price > 0 and lot_size > 0:
             margin_per_lot = price * lot_size * (settings.MARGIN_PCT / 100)
             if margin_per_lot > 0:
-                max_lots_by_margin = int(self.capital / margin_per_lot)
+                max_lots_by_margin = int(available_capital / margin_per_lot)
                 if lots > max_lots_by_margin:
                     log.warning(
                         f"Capping lots {lots} → {max_lots_by_margin} "
-                        f"(margin_per_lot={margin_per_lot:.0f}, capital={self.capital})"
+                        f"(margin_per_lot={margin_per_lot:.0f}, "
+                        f"available_capital={available_capital:.0f}, "
+                        f"deployed_margin={deployed_margin:.0f})"
                     )
                     lots = max_lots_by_margin
 
@@ -87,7 +92,8 @@ class PositionSizer:
             log.warning("Position size is 0 after margin cap — insufficient capital for 1 lot.")
 
         log.info(
-            f"Position sizing: capital={self.capital}, risk={risk_amount:.2f}, "
+            f"Position sizing: capital={self.capital}, deployed_margin={deployed_margin:.0f}, "
+            f"available={available_capital:.0f}, risk={risk_amount:.2f}, "
             f"ATR={atr:.2f}, raw_size={raw_size:.2f}, lots={lots}"
         )
         return lots

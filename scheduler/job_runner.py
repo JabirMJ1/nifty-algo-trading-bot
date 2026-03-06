@@ -20,6 +20,7 @@ class JobRunner:
         pnl_reporter=None,
         paper_trader=None,
         order_manager=None,
+        options_buyer=None,
         candle_builder=None,
         kite_feed=None,
         straddle_strategy=None,
@@ -32,6 +33,7 @@ class JobRunner:
         self._reporter = pnl_reporter
         self._trader = paper_trader
         self._order_manager = order_manager
+        self._options_buyer = options_buyer
         self._candle_builder = candle_builder
         self._kite_feed = kite_feed
         self._straddle = straddle_strategy
@@ -151,6 +153,8 @@ class JobRunner:
             await self._trader.close_all_positions("EOD_CLOSE", exchange="NSE")
         if self._order_manager:
             await self._order_manager.close_all_positions("EOD_CLOSE", exchange="NSE")
+        if self._options_buyer:
+            await self._options_buyer.close_all_positions("EOD_CLOSE")
 
         if self._candle_builder:
             await self._candle_builder.force_close_all(exchange="NSE")

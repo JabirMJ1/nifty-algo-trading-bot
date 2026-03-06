@@ -11,10 +11,11 @@ log = get_logger("pnl_reporter")
 class PnLReporter:
     """Generates and sends EOD PnL summary."""
 
-    def __init__(self, trade_journal=None, circuit_breaker=None, paper_trader=None):
+    def __init__(self, trade_journal=None, circuit_breaker=None, paper_trader=None, options_buyer=None):
         self._journal = trade_journal
         self._breaker = circuit_breaker
         self._trader = paper_trader
+        self._options_buyer = options_buyer
 
     async def generate_eod_report(self) -> str:
         """Generate end-of-day summary."""
@@ -23,6 +24,10 @@ class PnLReporter:
             trades = self._journal.get_trades_today()
         elif self._trader:
             trades = [t.to_event_data() for t in self._trader.trade_history]
+
+        # Include options trades regardless of mode
+        if self._options_buyer and self._options_buyer.trade_history:
+            trades = trades + self._options_buyer.trade_history
 
         if not trades:
             return self._format_no_trades()
@@ -38,7 +43,12 @@ class PnLReporter:
 
         win_rate = (len(winners) / len(closed_trades) * 100) if closed_trades else 0
 
-        balance = self._trader.balance if self._trader else 0
+        if self._trader:
+            balance = self._trader.balance
+        elif self._options_buyer:
+            balance = self._options_buyer.balance
+        else:
+            balance = 0
         daily_pnl = self._breaker.get_daily_pnl() if self._breaker else net_pnl
 
         report = (

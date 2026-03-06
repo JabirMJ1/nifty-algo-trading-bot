@@ -5,7 +5,7 @@ for other options strategies.
 """
 
 import asyncio
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, Optional
 
 from core.config import settings
@@ -51,6 +51,10 @@ class OptionsExecutor:
     def _resolve_option_symbols(self, strike: int) -> Dict[str, str]:
         """Resolve CE and PE trading symbols from Kite instruments.
 
+        Picks the nearest expiry date >= today for each leg, so the
+        correct weekly contract is selected even when monthly options
+        for the same strike appear earlier in the instruments list.
+
         Returns dict like {"CE": "NFO:NIFTY26FEB27600CE", "PE": "NFO:NIFTY26FEB27600PE"}
         """
         if not self.kite:
@@ -58,22 +62,31 @@ class OptionsExecutor:
 
         try:
             instruments = self.kite.instruments("NFO")
+            today = date.today()
             ce_symbol = None
+            ce_expiry = None
             pe_symbol = None
+            pe_expiry = None
 
             for inst in instruments:
-                ts = inst["tradingsymbol"]
-                if (inst["name"] == "NIFTY"
+                if not (inst["name"] == "NIFTY"
                         and inst["instrument_type"] in ("CE", "PE")
                         and inst["strike"] == strike):
-                    # Pick nearest weekly expiry
-                    if inst["instrument_type"] == "CE" and not ce_symbol:
-                        ce_symbol = f"NFO:{ts}"
-                    elif inst["instrument_type"] == "PE" and not pe_symbol:
-                        pe_symbol = f"NFO:{ts}"
+                    continue
 
-                    if ce_symbol and pe_symbol:
-                        break
+                expiry = inst.get("expiry")  # datetime.date from Kite
+                if not expiry or expiry < today:
+                    continue  # skip expired contracts
+
+                ts = inst["tradingsymbol"]
+                if inst["instrument_type"] == "CE":
+                    if ce_expiry is None or expiry < ce_expiry:
+                        ce_symbol = f"NFO:{ts}"
+                        ce_expiry = expiry
+                else:
+                    if pe_expiry is None or expiry < pe_expiry:
+                        pe_symbol = f"NFO:{ts}"
+                        pe_expiry = expiry
 
             return {"CE": ce_symbol, "PE": pe_symbol}
         except Exception as e:

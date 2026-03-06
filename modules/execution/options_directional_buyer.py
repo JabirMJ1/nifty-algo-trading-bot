@@ -16,7 +16,7 @@ Exit conditions (whichever hits first):
 import math
 import uuid
 from datetime import datetime, time, timezone, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from core.config import settings
 from core.event_bus import EventType, event_bus
@@ -108,6 +108,7 @@ class OptionsDirectionalBuyer:
         self.target_mult = settings.OPTIONS_TARGET_MULT
 
         self._position: Optional[Dict[str, Any]] = None
+        self.trade_history: List[Dict[str, Any]] = []
         self._executor = None  # OptionsExecutor (live mode only)
 
         if not settings.PAPER_TRADE and kite:
@@ -117,6 +118,7 @@ class OptionsDirectionalBuyer:
     def start(self):
         event_bus.subscribe(EventType.SIGNAL, self.on_signal)
         event_bus.subscribe(EventType.CANDLE, self.on_candle)
+        event_bus.subscribe(EventType.KILL_SWITCH, self.on_kill_switch)
         log.info(
             f"Options directional buyer started | "
             f"lot={self.lot_size} stop={self.stop_pct:.0%} target={self.target_mult}x | "
@@ -282,6 +284,18 @@ class OptionsDirectionalBuyer:
         if self._breaker:
             await self._breaker.update_pnl(pnl)
 
+        self.trade_history.append({
+            "instrument": f"NIFTY{pos['strike']}{pos['option_type']}",
+            "direction": "BUY",
+            "entry_price": pos["entry_premium"],
+            "exit_price": exit_premium,
+            "quantity": pos["lot_size"],
+            "pnl": pnl,
+            "costs": 40.0,
+            "exit_reason": reason,
+            "strategy": "options_directional",
+        })
+
         outcome = "PROFIT" if pnl >= 0 else "LOSS"
         log.info(
             f"OPTIONS {pos['option_type']} CLOSE ({reason}) | "
@@ -332,6 +346,11 @@ class OptionsDirectionalBuyer:
                 ),
             },
         )
+
+    async def on_kill_switch(self, data: Dict[str, Any]):
+        """Force-close open position when circuit breaker fires."""
+        log.warning(f"KILL_SWITCH received — force-closing options position | reason={data}")
+        await self.close_all_positions("KILL_SWITCH")
 
     async def close_all_positions(self, reason: str = "SHUTDOWN"):
         """Force-close any open position (called on graceful shutdown)."""

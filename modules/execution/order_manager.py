@@ -39,6 +39,7 @@ class OrderManager:
         self.positions: Dict[str, Dict[str, Any]] = {}
         self.trade_history: list = []
         self._candle_history: Dict[str, list] = {}
+        self.balance: float = float(settings.CAPITAL)
 
     async def on_signal(self, signal_data: Dict[str, Any]):
         """Process a trading signal."""
@@ -63,10 +64,16 @@ class OrderManager:
             log.warning(f"ATR is zero for {symbol}. Skipping.")
             return
 
+        deployed_margin = sum(
+            pos["entry_price"] * pos["quantity"] * (settings.MARGIN_PCT / 100)
+            for pos in self.positions.values()
+        )
+
         quantity = self.sizer.calculate_size(
             atr=atr,
             current_open_positions=len(self.positions),
             price=signal_data.get("price", 0.0),
+            deployed_margin=deployed_margin,
         )
         if quantity <= 0:
             return
@@ -279,6 +286,8 @@ class OrderManager:
 
         del self.positions[symbol]
         self.stops.remove_stops(symbol)
+        self.balance += pnl
+        self.sizer.update_capital(self.balance)
         await self.breaker.update_pnl(pnl)
 
         if order_id:
@@ -302,9 +311,15 @@ class OrderManager:
                 continue
             await self._close_position_market(symbol, reason)
 
+    async def on_kill_switch(self, data: Dict[str, Any]):
+        """Force-close all positions when circuit breaker fires."""
+        log.warning(f"KILL_SWITCH received — force-closing all positions | reason={data}")
+        await self.close_all_positions("KILL_SWITCH")
+
     def start(self):
         """Subscribe to events."""
         event_bus.subscribe(EventType.SIGNAL, self.on_signal)
         event_bus.subscribe(EventType.CANDLE, self.on_candle)
         event_bus.subscribe(EventType.TICK, self.on_tick)
+        event_bus.subscribe(EventType.KILL_SWITCH, self.on_kill_switch)
         log.info("Order manager started (LIVE MODE)")
