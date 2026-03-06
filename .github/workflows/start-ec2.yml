@@ -5,6 +5,9 @@ on:
     - cron: "15 3 * * 1-5"  # 8:45 AM IST (3:15 UTC), Mon–Fri
   workflow_dispatch:         # allow manual trigger
 
+permissions:
+  actions: write   # needed to dispatch deploy.yml
+
 jobs:
   start:
     name: Start trading-bot EC2
