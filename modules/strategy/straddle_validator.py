@@ -10,6 +10,7 @@ compare the estimation model against real market prices over time.
 """
 
 import csv
+import json
 import math
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ NIFTY_LOT_SIZE = 25
 STRIKE_INTERVAL = 50
 DATA_DIR = Path("data")
 CSV_PATH = DATA_DIR / "straddle_validation.csv"
+STATE_PATH = DATA_DIR / "straddle_today.json"  # persists entry across restarts
 
 HEADERS = [
     "date",
@@ -75,6 +77,7 @@ class StraddleValidator:
         self._today: Optional[Dict[str, Any]] = None
         DATA_DIR.mkdir(exist_ok=True)
         self._ensure_csv_header()
+        self._load_today_state()
 
     def _ensure_csv_header(self):
         if not CSV_PATH.exists():
@@ -82,30 +85,64 @@ class StraddleValidator:
                 csv.DictWriter(f, fieldnames=HEADERS).writeheader()
             log.info(f"Created straddle validation log: {CSV_PATH}")
 
+    def _load_today_state(self):
+        """Restore morning entry from disk if bot restarted mid-day."""
+        if not STATE_PATH.exists():
+            return
+        try:
+            data = json.loads(STATE_PATH.read_text())
+            today_str = now_ist().strftime("%Y-%m-%d")
+            if data.get("date") == today_str:
+                self._today = data
+                log.info(f"Restored straddle entry from disk: {today_str}")
+            else:
+                STATE_PATH.unlink(missing_ok=True)  # stale from previous day
+        except Exception as e:
+            log.warning(f"Could not load straddle today state: {e}")
+
+    def _save_today_state(self):
+        """Persist today's entry to disk so a mid-day restart doesn't lose it."""
+        if not self._today:
+            return
+        try:
+            STATE_PATH.write_text(json.dumps(self._today))
+        except Exception as e:
+            log.warning(f"Could not save straddle today state: {e}")
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _resolve_option_symbols(self, strike: int) -> Dict[str, str]:
-        """Return nearest weekly NFO CE + PE trading symbols for a strike."""
+        """Return nearest-expiry NFO CE + PE trading symbols for a strike.
+
+        Picks the option with the earliest expiry date to ensure we get the
+        weekly contract, not the monthly (which has the same strike but much
+        higher premium and different Greeks).
+        """
         if not self.kite:
             return {}
         try:
             instruments = self.kite.instruments("NFO")
-            ce_sym = pe_sym = None
+            today = now_ist().date()
+            candidates: Dict[str, list] = {"CE": [], "PE": []}
             for inst in instruments:
                 if (
                     inst["name"] == "NIFTY"
                     and inst["instrument_type"] in ("CE", "PE")
                     and inst["strike"] == float(strike)
+                    and inst["expiry"] >= today
                 ):
-                    sym = f"NFO:{inst['tradingsymbol']}"
-                    if inst["instrument_type"] == "CE" and not ce_sym:
-                        ce_sym = sym
-                    elif inst["instrument_type"] == "PE" and not pe_sym:
-                        pe_sym = sym
-                    if ce_sym and pe_sym:
-                        break
+                    candidates[inst["instrument_type"]].append(inst)
+
+            ce_sym = pe_sym = None
+            if candidates["CE"]:
+                nearest_ce = min(candidates["CE"], key=lambda x: x["expiry"])
+                ce_sym = f"NFO:{nearest_ce['tradingsymbol']}"
+            if candidates["PE"]:
+                nearest_pe = min(candidates["PE"], key=lambda x: x["expiry"])
+                pe_sym = f"NFO:{nearest_pe['tradingsymbol']}"
+
             return {"CE": ce_sym, "PE": pe_sym}
         except Exception as e:
             log.error(f"Failed to resolve option symbols: {e}")
@@ -206,6 +243,7 @@ class StraddleValidator:
             f"Spot={spot:.0f} | Model={model_premium:.1f} | "
             f"Real CE={real_ce} PE={real_pe} | Diff={diff_pct}%"
         )
+        self._save_today_state()
 
     async def record_exit(self):
         """3:15 PM snapshot: EOD option prices + real vs model P&L."""
@@ -266,3 +304,4 @@ class StraddleValidator:
 
         self._write_row()
         self._today = None
+        STATE_PATH.unlink(missing_ok=True)
