@@ -12,8 +12,10 @@ PRE_MARKET_START = time(9, 0)
 NO_SIGNAL_UNTIL = time(9, 30)  # skip first 15 min (opening volatility)
 
 # MCX — bullion/energy commodities (GOLDPETAL, GOLD, SILVER, CRUDEOIL etc.) trade 9:00 AM – 11:30 PM IST
+# (Nov–Mar: 11:30 PM due to US DST; Apr–Oct: 11:55 PM)
 MCX_OPEN = time(9, 0)
 MCX_CLOSE = time(23, 30)
+MCX_SQUAREOFF = time(23, 20)   # Zerodha auto-squareoff MIS positions 10 min before close
 MCX_NO_SIGNAL_UNTIL = time(9, 15)  # skip first 15 min after MCX open
 
 

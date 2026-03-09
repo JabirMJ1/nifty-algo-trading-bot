@@ -226,7 +226,7 @@ class OrderManager:
                 transaction_type=close_side,
                 quantity=quantity,
                 product=self.kite.PRODUCT_MIS,
-                order_type=self.kite.ORDER_TYPE_SL_M,
+                order_type=self.kite.ORDER_TYPE_SLM,
                 trigger_price=round(stop_price, 2),
             )
             log.info(

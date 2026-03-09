@@ -183,9 +183,9 @@ class AdaptiveStrategy(BaseStrategy):
                     f"(open={first_open:.2f} close={last_close:.2f})"
                 )
 
-        # Don't trade in the last hour — MCX trades until 23:30 IST, NSE until 15:30
+        # Stop new signals before force-close: MCX at 23:15 (force-close at 23:20), NSE at 14:30
         exchange = symbol.split(":")[0].upper() if ":" in symbol else "NSE"
-        no_trade_cutoff = time(23, 0) if exchange == "MCX" else time(14, 30)
+        no_trade_cutoff = time(23, 15) if exchange == "MCX" else time(14, 30)
         if candle_time >= no_trade_cutoff:
             return None
 

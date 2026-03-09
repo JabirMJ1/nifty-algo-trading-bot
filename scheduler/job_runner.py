@@ -70,12 +70,14 @@ class JobRunner:
             name="NSE Market Close",
         )
 
-        # MCX market close (23:30 IST) — close MCX positions
+        # MCX force-close (23:20 IST) — close positions 10 min before Zerodha auto-squareoff.
+        # Zerodha squares off MIS positions at 23:20 (10 min before 23:30 MCX close).
+        # Firing at 23:20 ensures we exit on our terms before their auto-squareoff.
         self.scheduler.add_job(
             self._on_mcx_close,
-            CronTrigger(hour=23, minute=30, day_of_week="mon-fri", timezone=IST),
+            CronTrigger(hour=23, minute=20, day_of_week="mon-fri", timezone=IST),
             id="mcx_close",
-            name="MCX Market Close",
+            name="MCX Force Close (23:20)",
         )
 
         # EOD report (23:35 IST) — after MCX close, covers full day
