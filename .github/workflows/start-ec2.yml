@@ -1,9 +1,7 @@
 name: Start EC2 (Pre-Market)
 
 on:
-  schedule:
-    - cron: "15 3 * * 1-5"  # 8:45 AM IST (3:15 UTC), Mon–Fri
-  workflow_dispatch:         # allow manual trigger
+  workflow_dispatch:         # manual trigger only — scheduling handled by AWS EventBridge
 
 permissions:
   actions: write   # needed to dispatch deploy.yml
