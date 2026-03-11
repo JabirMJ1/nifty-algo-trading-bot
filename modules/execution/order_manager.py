@@ -19,6 +19,16 @@ trade_log = get_trade_logger()
 
 MAX_RETRIES = 3
 RETRY_BACKOFF_BASE = 1  # seconds
+SL_VERIFY_WAIT_SECS = 2  # seconds to wait before verifying SL-M acceptance
+
+# SL-M order is live and protecting the position
+_SL_ACTIVE = {"OPEN", "TRIGGER PENDING"}
+# SL-M already fired (market gapped through stop during placement window) — position closed by exchange
+_SL_COMPLETE = {"COMPLETE"}
+# Transient: exchange still processing — recheck rather than retry the order
+_SL_TRANSIENT = {"PUT ORDER REQ RECEIVED", "VALIDATION PENDING"}
+# Definitive failures — retry the order placement
+_SL_FAILED = {"REJECTED", "CANCELLED"}
 
 
 class OrderManager:
@@ -200,6 +210,16 @@ class OrderManager:
         )
         return None
 
+    async def _get_order_status(self, order_id: str) -> Optional[str]:
+        """Fetch the latest status of an order from Kite."""
+        try:
+            history = self.kite.order_history(order_id)
+            if history:
+                return history[-1]["status"]
+        except Exception as e:
+            log.warning(f"Could not fetch status for order {order_id}: {e}")
+        return None
+
     async def _place_sl_order(
         self,
         exchange: str,
@@ -212,31 +232,95 @@ class OrderManager:
 
         This is a pending SELL (for BUY position) or BUY (for SELL position) order
         that fires at the exchange when `stop_price` is touched — even if the bot crashes.
+        Verifies the order is accepted by the exchange after placement and retries once
+        on definitive rejection, firing a Telegram alert if it ultimately fails.
         """
         close_side = (
             self.kite.TRANSACTION_TYPE_SELL
             if direction == "BUY"
             else self.kite.TRANSACTION_TYPE_BUY
         )
-        try:
-            sl_order_id = self.kite.place_order(
-                variety=self.kite.VARIETY_REGULAR,
-                exchange=exchange,
-                tradingsymbol=tradingsymbol,
-                transaction_type=close_side,
-                quantity=quantity,
-                product=self.kite.PRODUCT_MIS,
-                order_type=self.kite.ORDER_TYPE_SLM,
-                trigger_price=round(stop_price, 2),
+        symbol = f"{exchange}:{tradingsymbol}"
+        prev_sl_order_id: Optional[str] = None
+
+        for attempt in range(2):
+            # Cancel any previous failed attempt before retrying (avoid orphaned orders)
+            if prev_sl_order_id:
+                await self._cancel_sl_order(prev_sl_order_id)
+
+            try:
+                sl_order_id = self.kite.place_order(
+                    variety=self.kite.VARIETY_REGULAR,
+                    exchange=exchange,
+                    tradingsymbol=tradingsymbol,
+                    transaction_type=close_side,
+                    quantity=quantity,
+                    product=self.kite.PRODUCT_MIS,
+                    order_type=self.kite.ORDER_TYPE_SLM,
+                    trigger_price=round(stop_price, 2),
+                )
+            except Exception as e:
+                log.error(f"SL-M placement exception (attempt {attempt + 1}) for {symbol}: {e}")
+                if attempt == 0:
+                    await asyncio.sleep(SL_VERIFY_WAIT_SECS)
+                    continue
+                break
+
+            # Give exchange time to process, then verify acceptance
+            await asyncio.sleep(SL_VERIFY_WAIT_SECS)
+            status = await self._get_order_status(sl_order_id)
+
+            if status in _SL_ACTIVE:
+                log.info(
+                    f"SL-M order placed | {symbol} | "
+                    f"trigger={stop_price:.2f} | sl_order_id={sl_order_id} | status={status}"
+                )
+                return sl_order_id
+
+            if status in _SL_COMPLETE:
+                # Market gapped through stop during placement window — SL already executed
+                log.warning(
+                    f"SL-M order {sl_order_id} already COMPLETE for {symbol} "
+                    f"(stop hit during placement window) | trigger={stop_price:.2f}"
+                )
+                return sl_order_id
+
+            if status in _SL_TRANSIENT:
+                # Exchange still processing — recheck once more after a short wait
+                await asyncio.sleep(SL_VERIFY_WAIT_SECS)
+                status = await self._get_order_status(sl_order_id)
+                if status in _SL_ACTIVE | _SL_COMPLETE:
+                    log.info(
+                        f"SL-M order placed | {symbol} | "
+                        f"trigger={stop_price:.2f} | sl_order_id={sl_order_id} | status={status}"
+                    )
+                    return sl_order_id
+
+            if status is None:
+                # Status check failed (network issue) — assume order is live rather than risk a duplicate
+                log.warning(
+                    f"SL-M status check failed for {sl_order_id} ({symbol}) — "
+                    f"assuming order is live. Monitor manually."
+                )
+                return sl_order_id
+
+            # Definitive failure (REJECTED/CANCELLED) or unexpected status — retry
+            log.error(
+                f"SL-M order {sl_order_id} status='{status}' (attempt {attempt + 1}) for {symbol}"
             )
-            log.info(
-                f"SL-M order placed | {exchange}:{tradingsymbol} | "
-                f"trigger={stop_price:.2f} | sl_order_id={sl_order_id}"
-            )
-            return sl_order_id
-        except Exception as e:
-            log.error(f"Failed to place SL-M order for {tradingsymbol}: {e}")
-            return None
+            prev_sl_order_id = sl_order_id
+            if attempt == 0:
+                await asyncio.sleep(SL_VERIFY_WAIT_SECS)
+
+        await event_bus.publish(
+            EventType.ALERT,
+            {
+                "type": "SL_ORDER_FAILED",
+                "message": f"SL-M order rejected by exchange for {symbol} — position unprotected! Stop={stop_price:.2f}",
+            },
+        )
+        log.critical(f"SL-M order failed after 2 attempts for {symbol} — position has NO exchange-level stop protection!")
+        return None
 
     async def _cancel_sl_order(self, sl_order_id: Optional[str]):
         """Cancel a pending SL-M order (called when closing position normally)."""

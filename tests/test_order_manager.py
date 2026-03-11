@@ -44,6 +44,7 @@ def make_kite(order_id="ORD001") -> MagicMock:
     kite.PRODUCT_MIS       = "MIS"
     kite.place_order.return_value = order_id
     kite.cancel_order.return_value = True
+    kite.order_history.return_value = [{"status": "TRIGGER PENDING"}]
     return kite
 
 

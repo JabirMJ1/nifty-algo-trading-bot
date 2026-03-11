@@ -196,11 +196,11 @@ class TestSchedulerJobs:
         assert fields["hour"] == "15"
         assert fields["minute"] == "30"
 
-    def test_mcx_close_at_2330(self):
+    def test_mcx_close_at_2320(self):
         trigger = self._job_trigger(self.runner, "mcx_close")
         fields = self._cron_fields(trigger)
         assert fields["hour"] == "23"
-        assert fields["minute"] == "30"
+        assert fields["minute"] == "20"
 
     def test_eod_report_after_mcx_close(self):
         """EOD report must fire after MCX closes, not at 15:35."""
