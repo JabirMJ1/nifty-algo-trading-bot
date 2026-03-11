@@ -1,9 +1,7 @@
 name: Stop EC2 (Market Close)
 
 on:
-  schedule:
-    - cron: "05 18 * * 1-5"  # 11:35 PM IST (18:05 UTC), Mon–Fri — after MCX close
-  workflow_dispatch:          # allow manual trigger
+  workflow_dispatch:         # manual trigger only — scheduling handled by AWS EventBridge
 
 jobs:
   stop:
