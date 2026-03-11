@@ -385,7 +385,19 @@ class OrderManager:
 
         await event_bus.publish(
             EventType.TRADE,
-            {"type": "EXIT", "instrument": symbol, "pnl": pnl, "reason": reason},
+            {
+                "type": "EXIT",
+                "instrument": symbol,
+                "pnl": pnl,
+                "reason": reason,
+                "trade": {
+                    "trade_id": pos["order_id"],
+                    "exit_price": exit_price,
+                    "pnl": pnl,
+                    "costs": 0,
+                    "exit_reason": reason,
+                },
+            },
         )
 
     async def close_all_positions(self, reason: str = "EOD_CLOSE", exchange: str = None):

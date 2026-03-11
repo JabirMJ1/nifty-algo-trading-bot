@@ -123,6 +123,7 @@ class TradingBot:
             circuit_breaker=self.circuit_breaker,
             paper_trader=self.paper_trader,
             options_buyer=self.options_buyer,
+            order_manager=self.order_manager,
         )
 
         # News sentiment

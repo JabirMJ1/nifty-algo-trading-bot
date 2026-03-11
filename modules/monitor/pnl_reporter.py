@@ -11,11 +11,13 @@ log = get_logger("pnl_reporter")
 class PnLReporter:
     """Generates and sends EOD PnL summary."""
 
-    def __init__(self, trade_journal=None, circuit_breaker=None, paper_trader=None, options_buyer=None):
+    def __init__(self, trade_journal=None, circuit_breaker=None, paper_trader=None, options_buyer=None, order_manager=None):
         self._journal = trade_journal
         self._breaker = circuit_breaker
         self._trader = paper_trader
         self._options_buyer = options_buyer
+        self._order_manager = order_manager
+        self._eod_sent = False
 
     async def generate_eod_report(self) -> str:
         """Generate end-of-day summary."""
@@ -45,6 +47,8 @@ class PnLReporter:
 
         if self._trader:
             balance = self._trader.balance
+        elif self._order_manager:
+            balance = self._order_manager.balance
         elif self._options_buyer:
             balance = self._options_buyer.balance
         else:
@@ -86,7 +90,11 @@ class PnLReporter:
         )
 
     async def send_eod_report(self):
-        """Generate and send EOD report via Telegram."""
+        """Generate and send EOD report via Telegram. Deduped — fires at most once per day."""
+        if self._eod_sent:
+            log.info("EOD report already sent today — skipping duplicate.")
+            return
+        self._eod_sent = True
         report = await self.generate_eod_report()
         log.info(f"EOD Report:\n{report}")
         await event_bus.publish(
