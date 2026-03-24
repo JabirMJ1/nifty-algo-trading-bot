@@ -106,7 +106,7 @@ class OrderManager:
         )
 
         if order_id:
-            fill_price = signal_data["price"]  # approximate; update on fill
+            fill_price = await self._get_fill_price(order_id, signal_data["price"])
             self.stops.set_stops(symbol, fill_price, side, atr)
             stop_level = self.stops.get_stop_level(symbol)
 
@@ -219,6 +219,26 @@ class OrderManager:
         except Exception as e:
             log.warning(f"Could not fetch status for order {order_id}: {e}")
         return None
+
+    async def _get_fill_price(self, order_id: str, fallback: float) -> float:
+        """Fetch actual average fill price from Kite order history.
+
+        Polls up to 3 times (1s apart) waiting for COMPLETE status.
+        Falls back to the provided price if unavailable.
+        """
+        try:
+            for _ in range(3):
+                history = self.kite.order_history(order_id)
+                for update in reversed(history):
+                    if update.get("status") == "COMPLETE" and update.get("average_price", 0) > 0:
+                        fill = float(update["average_price"])
+                        log.info(f"Actual fill price for {order_id}: {fill:.2f} (fallback was {fallback:.2f})")
+                        return fill
+                await asyncio.sleep(1)
+        except Exception as e:
+            log.warning(f"Could not fetch fill price for order {order_id}: {e}")
+        log.warning(f"Using fallback price {fallback:.2f} for order {order_id}")
+        return fallback
 
     async def _place_sl_order(
         self,
@@ -359,9 +379,14 @@ class OrderManager:
             order_type=self.kite.ORDER_TYPE_MARKET,
         )
 
-        # Always clean up internal state — position may already be closed by exchange SL-M
+        # Fetch actual fill price; fall back to last candle close if unavailable
         candles = self._candle_history.get(symbol, [])
-        exit_price = candles[-1]["close"] if candles else pos["entry_price"]
+        fallback_price = candles[-1]["close"] if candles else pos["entry_price"]
+        exit_price = (
+            await self._get_fill_price(order_id, fallback_price)
+            if order_id
+            else fallback_price
+        )
 
         if pos["direction"] == "BUY":
             pnl = (exit_price - pos["entry_price"]) * pos["quantity"]
