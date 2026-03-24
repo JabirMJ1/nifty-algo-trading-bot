@@ -389,9 +389,18 @@ class OrderManager:
         )
 
         if pos["direction"] == "BUY":
-            pnl = (exit_price - pos["entry_price"]) * pos["quantity"]
+            gross_pnl = (exit_price - pos["entry_price"]) * pos["quantity"]
         else:
-            pnl = (pos["entry_price"] - exit_price) * pos["quantity"]
+            gross_pnl = (pos["entry_price"] - exit_price) * pos["quantity"]
+
+        turnover = (pos["entry_price"] + exit_price) * pos["quantity"]
+        costs = round(
+            settings.BROKERAGE_PER_ORDER * 2
+            + turnover * (settings.STT_PCT / 100)
+            + turnover * (settings.EXCHANGE_CHARGES_PCT / 100),
+            2,
+        )
+        pnl = gross_pnl - costs
 
         del self.positions[symbol]
         self.stops.remove_stops(symbol)
@@ -400,13 +409,13 @@ class OrderManager:
         await self.breaker.update_pnl(pnl)
 
         if order_id:
-            log.info(f"POSITION CLOSED | {symbol} | PnL={pnl:.2f} | reason={reason}")
+            log.info(f"POSITION CLOSED | {symbol} | gross={gross_pnl:.2f} costs={costs:.2f} net={pnl:.2f} | reason={reason}")
         else:
             log.warning(
                 f"Close order failed for {symbol} — position may be closed by SL-M already | "
-                f"estimated PnL={pnl:.2f} | reason={reason}"
+                f"estimated gross={gross_pnl:.2f} costs={costs:.2f} net={pnl:.2f} | reason={reason}"
             )
-        trade_log.info(f"CLOSE | {symbol} | PnL={pnl:.2f} | reason={reason}")
+        trade_log.info(f"CLOSE | {symbol} | gross={gross_pnl:.2f} costs={costs:.2f} net={pnl:.2f} | reason={reason}")
 
         await event_bus.publish(
             EventType.TRADE,
@@ -418,8 +427,9 @@ class OrderManager:
                 "trade": {
                     "trade_id": pos["order_id"],
                     "exit_price": exit_price,
+                    "gross_pnl": gross_pnl,
                     "pnl": pnl,
-                    "costs": 0,
+                    "costs": costs,
                     "exit_reason": reason,
                 },
             },

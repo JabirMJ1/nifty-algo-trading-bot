@@ -39,9 +39,9 @@ class PnLReporter:
         winners = [t for t in closed_trades if t.get("pnl", 0) > 0]
         losers = [t for t in closed_trades if t.get("pnl", 0) < 0]
 
-        gross_pnl = sum(t.get("pnl", 0) for t in closed_trades)
         total_costs = sum(t.get("costs", 0) for t in closed_trades)
-        net_pnl = gross_pnl  # costs already deducted in paper_trader
+        net_pnl = sum(t.get("pnl", 0) for t in closed_trades)
+        gross_pnl = net_pnl + total_costs
 
         win_rate = (len(winners) / len(closed_trades) * 100) if closed_trades else 0
 
