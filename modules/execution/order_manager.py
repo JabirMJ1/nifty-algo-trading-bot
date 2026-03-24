@@ -49,7 +49,7 @@ class OrderManager:
         self.positions: Dict[str, Dict[str, Any]] = {}
         self.trade_history: list = []
         self._candle_history: Dict[str, list] = {}
-        self.balance: float = float(settings.CAPITAL)
+        self.balance: float = self._resolve_starting_capital()
 
     async def on_signal(self, signal_data: Dict[str, Any]):
         """Process a trading signal."""
@@ -411,6 +411,25 @@ class OrderManager:
         """Force-close all positions when circuit breaker fires."""
         log.warning(f"KILL_SWITCH received — force-closing all positions | reason={data}")
         await self.close_all_positions("KILL_SWITCH")
+
+    def _resolve_starting_capital(self) -> float:
+        """Use the lower of env CAPITAL and actual Kite account balance."""
+        env_capital = float(settings.CAPITAL)
+        try:
+            margins = self.kite.margins(segment="commodity")
+            kite_balance = float(margins.get("net", env_capital))
+            capital = min(env_capital, kite_balance)
+            if capital < env_capital:
+                log.info(
+                    f"Starting capital set to Kite balance ₹{capital:.2f} "
+                    f"(lower than env CAPITAL ₹{env_capital:.2f})"
+                )
+            else:
+                log.info(f"Starting capital: ₹{capital:.2f} (env CAPITAL)")
+            return capital
+        except Exception as e:
+            log.warning(f"Could not fetch Kite margins — using env CAPITAL ₹{env_capital:.2f}: {e}")
+            return env_capital
 
     def start(self):
         """Subscribe to events."""
