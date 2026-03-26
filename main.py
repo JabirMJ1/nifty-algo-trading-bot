@@ -14,7 +14,7 @@ import redis
 from core.config import settings
 from core.event_bus import event_bus, EventType
 from core.logger import get_logger
-from modules.sensory.market_hours import now_ist
+from modules.sensory.market_hours import now_ist, get_market_holiday
 from modules.sensory.kite_feed import KiteFeed
 from modules.sensory.candle_builder import CandleBuilder
 from modules.sensory.news_sentiment import NewsSentimentFeed
@@ -215,6 +215,21 @@ class TradingBot:
                 # Windows doesn't support add_signal_handler
                 signal.signal(sig, lambda s, f, sig=sig: handle_shutdown(sig))
 
+    async def _stop_ec2_instance(self):
+        """Stop this EC2 instance — called on holidays to avoid idle costs."""
+        try:
+            import boto3
+            # Fetch instance ID from EC2 instance metadata service
+            req = __import__("urllib.request", fromlist=["urlopen"]).urlopen(
+                "http://169.254.169.254/latest/meta-data/instance-id", timeout=2
+            )
+            instance_id = req.read().decode().strip()
+            ec2 = boto3.client("ec2", region_name="ap-south-1")
+            ec2.stop_instances(InstanceIds=[instance_id])
+            log.info(f"EC2 instance {instance_id} stop requested.")
+        except Exception as e:
+            log.warning(f"Could not auto-stop EC2 instance: {e}")
+
     async def run(self):
         """Main run loop."""
         log.info("=" * 50)
@@ -223,6 +238,18 @@ class TradingBot:
         log.info(f"  Instruments: {settings.instruments_list}")
         log.info(f"  Capital: Rs. {settings.CAPITAL}")
         log.info("=" * 50)
+
+        # Holiday check — shut down early if NSE/MCX is closed today
+        holiday = get_market_holiday()
+        if holiday:
+            log.info(f"Today is a market holiday: {holiday}. Shutting down.")
+            await event_bus.publish(
+                EventType.ALERT,
+                {"type": "HOLIDAY", "message": f"Market holiday today: {holiday}\nBot will not trade."},
+            )
+            await asyncio.sleep(2)  # give Telegram time to send
+            await self._stop_ec2_instance()
+            return
 
         # Initialize
         self._init_modules()

@@ -1,7 +1,10 @@
 """Market session time helpers. All times in IST."""
 
 from datetime import datetime, time
+from typing import Optional
 import pytz
+import urllib.request
+import json
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -70,6 +73,38 @@ def minutes_to_close() -> int:
     close_dt = now.replace(hour=15, minute=30, second=0, microsecond=0)
     delta = close_dt - now
     return max(0, int(delta.total_seconds() / 60))
+
+
+def get_market_holiday(date: Optional[datetime] = None) -> Optional[str]:
+    """Check if a given date (default: today IST) is an NSE/MCX trading holiday.
+
+    Fetches the NSE holiday calendar for the current year. Returns the holiday
+    description if it is a holiday, or None if it is a normal trading day.
+    Returns None on network errors (fail-open — don't block trading on API issues).
+    """
+    check = (date or now_ist()).date()
+    check_str = check.strftime("%-d-%b-%Y")  # e.g. "26-Mar-2026"
+
+    try:
+        req = urllib.request.Request(
+            "https://www.nseindia.com/api/holiday-master?type=trading",
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+
+        # NSE returns segments: CM (equity), FO (F&O), etc. — check CM as reference
+        for segment in ("CM", "MCX"):
+            for entry in data.get(segment, []):
+                if entry.get("tradingDate", "").strip() == check_str:
+                    return entry.get("description", "Market Holiday")
+    except Exception:
+        pass  # fail-open: network issues should not block the bot
+
+    return None
 
 
 def ist_to_utc(dt: datetime) -> datetime:
