@@ -37,20 +37,52 @@ class KiteFeed:
         return data
 
     def resolve_instruments(self):
-        """Resolve instrument symbols to tokens."""
+        """Resolve instrument symbols to Kite tokens.
+
+        Supports two formats:
+        - Exact:   MCX:GOLDPETAL26APRFUT  — resolves directly
+        - Generic: MCX:GOLDPETAL          — auto-picks the nearest-expiry FUT contract
+
+        If an exact symbol fails (e.g. contract expired), falls back to front-month
+        resolution using the base name so the bot keeps running across rollovers.
+        """
         all_instruments = self.kite.instruments()
+
         for symbol in settings.instruments_list:
             exchange, tradingsymbol = symbol.split(":")
-            for inst in all_instruments:
-                if (
-                    inst["exchange"] == exchange
-                    and inst["tradingsymbol"] == tradingsymbol
-                ):
-                    token = inst["instrument_token"]
-                    self._instrument_tokens[symbol] = token
-                    self._token_to_symbol[token] = symbol
-                    log.info(f"Resolved {symbol} -> token {token}")
-                    break
+
+            # Try exact match first
+            resolved = next(
+                (i for i in all_instruments
+                 if i["exchange"] == exchange and i["tradingsymbol"] == tradingsymbol),
+                None,
+            )
+
+            if resolved:
+                token = resolved["instrument_token"]
+                self._instrument_tokens[symbol] = token
+                self._token_to_symbol[token] = symbol
+                log.info(f"Resolved {symbol} -> token {token}")
+                continue
+
+            # Exact match failed — treat tradingsymbol as a base name and find front-month FUT
+            candidates = [
+                i for i in all_instruments
+                if i["exchange"] == exchange
+                and i["instrument_type"] == "FUT"
+                and i["name"] == tradingsymbol
+                and i.get("expiry")
+            ]
+            if candidates:
+                front = min(candidates, key=lambda i: i["expiry"])
+                resolved_symbol = f"{exchange}:{front['tradingsymbol']}"
+                token = front["instrument_token"]
+                self._instrument_tokens[resolved_symbol] = token
+                self._token_to_symbol[token] = resolved_symbol
+                log.info(
+                    f"Auto-resolved {symbol} -> {resolved_symbol} "
+                    f"(expiry {front['expiry']}) token {token}"
+                )
             else:
                 log.warning(f"Could not resolve instrument: {symbol}")
 
