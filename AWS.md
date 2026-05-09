@@ -4,18 +4,109 @@ Quick reference for managing the trading bot on AWS.
 
 ---
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│               AWS  ap-south-1  (Mumbai)             │
+│                                                     │
+│  ┌────────────────────────────────────────────────┐ │
+│  │  EC2  t2.micro  (i-0123456789abcdef0)          │ │
+│  │  Starts 8:45 AM IST · Stops 11:35 PM IST       │ │
+│  │                                                │ │
+│  │  Docker Compose                                │ │
+│  │  ┌──────────────┐  ┌──────────────────────┐   │ │
+│  │  │  trading-bot │  │  PostgreSQL           │   │ │
+│  │  │  (Python)    │  │  (trade journal)      │   │ │
+│  │  └──────────────┘  └──────────────────────┘   │ │
+│  │  ┌──────────────┐                             │ │
+│  │  │  Redis       │                             │ │
+│  │  │  (PnL/state) │                             │ │
+│  │  └──────────────┘                             │ │
+│  └────────────────────────────────────────────────┘ │
+│                                                     │
+│  ┌─────────────────┐  ┌───────────────────────────┐ │
+│  │  EventBridge    │  │  Secrets Manager          │ │
+│  │  Start 8:45 AM  │  │  trading-bot/env          │ │
+│  │  Stop  11:35 PM │  │  (all credentials + .env) │ │
+│  └─────────────────┘  └───────────────────────────┘ │
+│                                                     │
+│  ┌─────────────────┐  ┌───────────────────────────┐ │
+│  │  CloudWatch     │  │  S3                       │ │
+│  │  /trading-bot/  │  │  trading-bot-logs-        │ │
+│  │  bot (30d logs) │  │  123456789012             │ │
+│  └─────────────────┘  └───────────────────────────┘ │
+└─────────────────────────────────────────────────────┘
+          ↕ WebSocket ticks
+┌──────────────────────┐
+│  Zerodha Kite API    │
+│  MCX:GOLDPETAL (FUT) │
+│  Auto front-month    │
+└──────────────────────┘
+          ↕ Alerts
+┌──────────────────────┐
+│  Telegram Bot        │
+│  Chat: 339224418     │
+└──────────────────────┘
+          ↕ CI/CD
+┌──────────────────────┐
+│  GitHub Actions      │
+│  JabirMJ1/trading-   │
+│  bot (main branch)   │
+└──────────────────────┘
+```
+
+---
+
+## AWS Services
+
+| Service | Purpose |
+|---|---|
+| **EC2** t2.micro | Runs the bot via Docker Compose |
+| **EventBridge** | Auto start (8:45 AM) / stop (11:35 PM) Mon–Fri |
+| **Secrets Manager** | Stores all credentials and `.env` config |
+| **CloudWatch Logs** | Bot logs — 30-day retention |
+| **S3** | EOD log archives (Friday exports) |
+| **IAM** | `trading-bot-admin` user + EC2 instance role |
+
+---
+
 ## Infrastructure Overview
 
 | Resource | Value |
 |----------|-------|
 | Region | `ap-south-1` (Mumbai) |
 | EC2 Instance | `i-0123456789abcdef0` (t2.micro) |
-| EC2 IP | `203.0.113.11` (changes on restart — always re-fetch) |
+| EC2 IP | Dynamic — changes on every stop/start, always re-fetch |
 | EC2 User | `ec2-user` |
+| SSH Key | `my-ec2-key` (in GitHub Secrets as `EC2_SSH_KEY`) |
 | Bot directory | `/opt/trading-bot` |
 | CloudWatch Log Group | `/trading-bot/bot` |
 | S3 Bucket (log archives) | `trading-bot-logs-123456789012` |
 | Secrets Manager | `trading-bot/env` |
+
+## Setting Up on a New Device
+
+Requirements:
+1. **AWS CLI** — configured with `trading-bot-admin` IAM credentials
+2. **GitHub CLI** (`gh`) — authenticated to `JabirMJ1/trading-bot`
+3. **SSH key** — retrieve `my-ec2-key.pem` from whoever has it (or GitHub Secrets)
+
+```bash
+# Configure AWS CLI
+aws configure
+# AWS Access Key ID:     <trading-bot-admin key>
+# AWS Secret Access Key: <trading-bot-admin secret>
+# Default region:        ap-south-1
+# Default output format: json
+
+# Authenticate GitHub CLI
+gh auth login
+
+# Verify access
+aws sts get-caller-identity
+gh repo view JabirMJ1/trading-bot
+```
 
 ---
 
