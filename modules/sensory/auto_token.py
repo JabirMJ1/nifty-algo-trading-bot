@@ -56,9 +56,10 @@ def refresh_kite_token() -> str | None:
     r.raise_for_status()
 
     # Step 3: Walk the redirect chain manually, stop when we see request_token
-    # Chain: kite.trade → kite.zerodha.com/connect/login → /connect/finish → redirect_url?request_token=...
-    # The final redirect goes to the app's registered redirect URL (may be localhost) — never follow it.
-    next_url = f"https://kite.trade/connect/login?api_key={settings.KITE_API_KEY}&v=3"
+    # Session cookies from steps 1-2 live on kite.zerodha.com — must start chain there,
+    # not kite.trade, so the cookies are sent and the server recognises the session.
+    # Chain: kite.zerodha.com/connect/login → /connect/finish → redirect_url?request_token=...
+    next_url = f"https://kite.zerodha.com/connect/login?api_key={settings.KITE_API_KEY}&v=3"
     request_token = None
     for _ in range(10):
         r = session.get(next_url, allow_redirects=False)

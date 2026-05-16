@@ -77,7 +77,8 @@ Quick reference for managing the trading bot on AWS.
 |----------|-------|
 | Region | `ap-south-1` (Mumbai) |
 | EC2 Instance | `i-0123456789abcdef0` (t2.micro) |
-| EC2 IP | Dynamic — changes on every stop/start, always re-fetch |
+| EC2 IP | **203.0.113.10** (Elastic IP — static, never changes) |
+| Elastic IP Allocation | `eipalloc-0123456789abcdef0` |
 | EC2 User | `ec2-user` |
 | SSH Key | `my-ec2-key` (in GitHub Secrets as `EC2_SSH_KEY`) |
 | Bot directory | `/opt/trading-bot` |
@@ -112,31 +113,23 @@ gh repo view JabirMJ1/trading-bot
 
 ## SSH into the EC2 Instance
 
-The local SSH key is `~/.ssh/my-ec2-key`. The IP changes every time the instance stops/starts — always fetch the current one first.
+The local SSH key is `~/.ssh/my-ec2-key`. The IP is now **static: 203.0.113.10** (Elastic IP).
 
 ```bash
-# 1. Get current IP
-IP=$(aws ec2 describe-instances \
-  --instance-ids i-0123456789abcdef0 \
-  --region ap-south-1 \
-  --query "Reservations[0].Instances[0].PublicIpAddress" \
-  --output text)
-echo $IP
-
-# 2. Push your public key (valid for 60 seconds)
+# Push your public key (valid for 60 seconds)
 aws ec2-instance-connect send-ssh-public-key \
   --region ap-south-1 \
   --instance-id i-0123456789abcdef0 \
   --instance-os-user ec2-user \
   --ssh-public-key file://$HOME/.ssh/my-ec2-key.pub
 
-# 3. SSH in
-ssh -i ~/.ssh/my-ec2-key ec2-user@$IP
+# SSH in
+ssh -i ~/.ssh/my-ec2-key ec2-user@203.0.113.10
 ```
 
-> **One-liner** (does all 3 steps):
+> **One-liner**:
 > ```bash
-> IP=$(aws ec2 describe-instances --instance-ids i-0123456789abcdef0 --region ap-south-1 --query "Reservations[0].Instances[0].PublicIpAddress" --output text) && aws ec2-instance-connect send-ssh-public-key --region ap-south-1 --instance-id i-0123456789abcdef0 --instance-os-user ec2-user --ssh-public-key file://$HOME/.ssh/my-ec2-key.pub && ssh -i ~/.ssh/my-ec2-key ec2-user@$IP
+> aws ec2-instance-connect send-ssh-public-key --region ap-south-1 --instance-id i-0123456789abcdef0 --instance-os-user ec2-user --ssh-public-key file://$HOME/.ssh/my-ec2-key.pub && ssh -i ~/.ssh/my-ec2-key ec2-user@203.0.113.10
 > ```
 
 ---
@@ -342,18 +335,13 @@ aws logs filter-log-events \
 
 **Check if bot container is running:**
 ```bash
-IP=$(aws ec2 describe-instances --instance-ids i-0123456789abcdef0 --region ap-south-1 --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
 aws ec2-instance-connect send-ssh-public-key --region ap-south-1 --instance-id i-0123456789abcdef0 --instance-os-user ec2-user --ssh-public-key file://$HOME/.ssh/my-ec2-key.pub
-ssh -i ~/.ssh/my-ec2-key ec2-user@$IP "docker compose -f /opt/trading-bot/docker-compose.yml ps"
+ssh -i ~/.ssh/my-ec2-key ec2-user@203.0.113.10 "docker compose -f /opt/trading-bot/docker-compose.yml ps"
 ```
-
-**EC2 IP changed after restart:**
-Always use `aws ec2 describe-instances` to get the current IP — it changes on every stop/start.
 
 **Kite token expired:**
 ```bash
 # Run generate_token.py on the server
-IP=$(aws ec2 describe-instances --instance-ids i-0123456789abcdef0 --region ap-south-1 --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
 aws ec2-instance-connect send-ssh-public-key --region ap-south-1 --instance-id i-0123456789abcdef0 --instance-os-user ec2-user --ssh-public-key file://$HOME/.ssh/my-ec2-key.pub
-ssh -i ~/.ssh/my-ec2-key ec2-user@$IP "cd /opt/trading-bot && python generate_token.py"
+ssh -i ~/.ssh/my-ec2-key ec2-user@203.0.113.10 "cd /opt/trading-bot && python generate_token.py"
 ```
