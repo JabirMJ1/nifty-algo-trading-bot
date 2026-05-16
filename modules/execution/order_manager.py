@@ -194,6 +194,7 @@ class OrderManager:
                     order_type=order_type,
                     price=price if price else None,
                     trigger_price=trigger_price if trigger_price else None,
+                    market_protection=1.0 if order_type == self.kite.ORDER_TYPE_MARKET else None,
                 )
                 log.info(f"Order placed successfully: {order_id}")
                 return order_id

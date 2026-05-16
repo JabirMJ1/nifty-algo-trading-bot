@@ -1,5 +1,5 @@
 # Broker API
-kiteconnect==5.0.1
+kiteconnect==5.2.0
 
 # Database
 psycopg2-binary==2.9.9
