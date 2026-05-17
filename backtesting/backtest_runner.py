@@ -167,7 +167,13 @@ class BacktestRunner:
         stop_mult = meta.get("stop_multiplier", settings.STOP_ATR_MULTIPLIER)
         target_mult = meta.get("target_multiplier", settings.TARGET_ATR_MULTIPLIER)
         stop_distance = atr * stop_mult
-        target_distance = atr * target_mult
+        atr_target = atr * target_mult
+        if settings.PROFIT_TARGET_PCT > 0:
+            # Capital % target in points — take profit at whichever comes first
+            capital_target = (self.capital * settings.PROFIT_TARGET_PCT / 100) / quantity
+            target_distance = min(atr_target, capital_target)
+        else:
+            target_distance = atr_target
 
         if signal.direction.value == "BUY":
             stop_loss = entry_price - stop_distance

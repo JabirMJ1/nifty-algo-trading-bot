@@ -5,7 +5,7 @@ from datetime import datetime, date
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from modules.strategy.adaptive_strategy import AdaptiveStrategy, ema, rsi, vwap, calculate_atr
+from modules.strategy.adaptive_strategy import AdaptiveStrategy, ema, stoch_rsi, vwap, calculate_atr
 from modules.strategy.signal_models import Direction, SignalStrength
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -68,16 +68,30 @@ class TestIndicators:
         slow = ema(values, 21)
         assert fast > slow
 
-    def test_rsi_neutral_on_insufficient_data(self):
-        assert rsi([100.0] * 5, period=14) == 50.0
+    def test_stoch_rsi_neutral_on_insufficient_data(self):
+        assert stoch_rsi([100.0] * 5) == 50.0
 
-    def test_rsi_all_gains(self):
-        closes = [float(i) for i in range(20)]
-        assert rsi(closes) > 80
+    def test_stoch_rsi_high_on_strong_rally(self):
+        # Phase 1: bearish-biased (-2/+0.5 alternating) → RSI low (~20)
+        # Phase 2: strong gains → RSI rises; stoch window spans the transition
+        bearish = []
+        p = 100.0
+        for i in range(30):
+            p += -2.0 if i % 2 == 0 else 0.5
+            bearish.append(p)
+        gains = [bearish[-1] + (i + 1) * 3 for i in range(20)]
+        assert stoch_rsi(bearish + gains) > 80
 
-    def test_rsi_all_losses(self):
-        closes = [float(20 - i) for i in range(20)]
-        assert rsi(closes) < 20
+    def test_stoch_rsi_low_on_strong_selloff(self):
+        # Phase 1: bullish-biased (+2/-0.5 alternating) → RSI high (~80)
+        # Phase 2: strong losses → RSI drops; stoch window spans the transition
+        bullish = []
+        p = 100.0
+        for i in range(30):
+            p += 2.0 if i % 2 == 0 else -0.5
+            bullish.append(p)
+        losses = [bullish[-1] - (i + 1) * 3 for i in range(20)]
+        assert stoch_rsi(bullish + losses) < 20
 
     def test_vwap_constant_price(self):
         candles = [_candle(100, high=100, low=100) for _ in range(5)]
@@ -103,11 +117,13 @@ class TestScoring:
             symbol="NSE:NIFTY26MARFUT",
             candle=_candle(22200, open_=22150),  # bullish candle
             price=22200,
-            fast_ema=22200,
-            slow_ema=22100,
-            prev_fast=22080,  # prev_fast < prev_slow → fresh crossover
-            prev_slow=22090,
-            current_rsi=55.0,
+            macd_line=5.0,      # MACD above signal → bullish
+            signal_line=2.0,
+            histogram=3.0,      # positive and growing
+            prev_macd=-1.0,     # was below signal → fresh crossover
+            prev_signal=2.0,
+            prev_hist=-2.0,
+            current_srsi=60.0,
             current_vwap=22150.0,
             adx=28.0,
             atr=80.0,
@@ -123,11 +139,13 @@ class TestScoring:
             symbol="NSE:NIFTY26MARFUT",
             candle=_candle(21900, open_=21950),  # bearish candle
             price=21900,
-            fast_ema=21900,
-            slow_ema=22000,
-            prev_fast=22010,  # prev_fast > prev_slow → fresh crossover
-            prev_slow=22000,
-            current_rsi=45.0,
+            macd_line=-5.0,     # MACD below signal → bearish
+            signal_line=-2.0,
+            histogram=-3.0,     # negative and falling
+            prev_macd=1.0,      # was above signal → fresh crossover
+            prev_signal=-2.0,
+            prev_hist=2.0,
+            current_srsi=40.0,
             current_vwap=21950.0,
             adx=28.0,
             atr=80.0,
@@ -138,26 +156,28 @@ class TestScoring:
         self.strategy._first_hour_direction[defaults["symbol"]] = "BEARISH"
         return self.strategy._score_sell(**defaults)
 
-    def test_buy_fresh_crossover_gets_primary_trigger(self):
-        score = self._score_buy(prev_fast=22080, prev_slow=22090, fast_ema=22200, slow_ema=22100)
-        assert score >= 30, "Fresh crossover must add at least 30 points"
+    def test_buy_fresh_macd_crossover_gets_primary_trigger(self):
+        # prev_macd < prev_signal, now macd > signal → fresh bullish crossover
+        score = self._score_buy(prev_macd=-1.0, prev_signal=2.0, macd_line=5.0, signal_line=2.0)
+        assert score >= 30, "Fresh MACD crossover must add at least 30 points"
 
-    def test_sell_fresh_crossover_gets_primary_trigger(self):
-        score = self._score_sell(prev_fast=22010, prev_slow=22000, fast_ema=21900, slow_ema=22000)
+    def test_sell_fresh_macd_crossover_gets_primary_trigger(self):
+        score = self._score_sell(prev_macd=1.0, prev_signal=-2.0, macd_line=-5.0, signal_line=-2.0)
         assert score >= 30
 
     def test_buy_no_trigger_returns_zero(self):
-        # fast < slow — no crossover, no uptrend
+        # MACD below signal, no crossover, no mean-reversion setup
         score = self._score_buy(
-            prev_fast=21900, prev_slow=22000,
-            fast_ema=21950, slow_ema=22000,
+            macd_line=-5.0, signal_line=2.0, histogram=-7.0,
+            prev_macd=-4.0, prev_signal=2.0, prev_hist=-6.0,
         )
         assert score == 0
 
     def test_sell_no_trigger_returns_zero(self):
+        # MACD above signal, no crossover
         score = self._score_sell(
-            prev_fast=21800, prev_slow=22000,
-            fast_ema=22100, slow_ema=22000,
+            macd_line=5.0, signal_line=-2.0, histogram=7.0,
+            prev_macd=4.0, prev_signal=-2.0, prev_hist=6.0,
         )
         assert score == 0
 
@@ -187,20 +207,20 @@ class TestScoring:
         )
         assert boosted > base
 
-    def test_buy_very_overbought_rsi_penalised(self):
-        score = self._score_buy(current_rsi=80.0)
-        # RSI > 75 penalty should reduce the score
-        score_normal = self._score_buy(current_rsi=55.0)
+    def test_buy_very_overbought_stoch_rsi_penalised(self):
+        score = self._score_buy(current_srsi=90.0)
+        # StochRSI > 85 penalty should reduce the score
+        score_normal = self._score_buy(current_srsi=60.0)
         assert score < score_normal
 
-    def test_sell_very_oversold_rsi_penalised(self):
-        score = self._score_sell(current_rsi=20.0)
-        score_normal = self._score_sell(current_rsi=45.0)
+    def test_sell_very_oversold_stoch_rsi_penalised(self):
+        score = self._score_sell(current_srsi=10.0)
+        score_normal = self._score_sell(current_srsi=40.0)
         assert score < score_normal
 
     def test_buy_score_cannot_go_below_zero(self):
         score = self._score_buy(
-            current_rsi=80.0,
+            current_srsi=90.0,
             lunch_hour=True,
             sentiment={"score": -0.8, "magnitude": 0.6},
         )
@@ -208,7 +228,7 @@ class TestScoring:
 
     def test_sell_score_cannot_go_below_zero(self):
         score = self._score_sell(
-            current_rsi=20.0,
+            current_srsi=10.0,
             lunch_hour=True,
             sentiment={"score": 0.8, "magnitude": 0.6},
         )
@@ -222,15 +242,18 @@ class TestOnCandle:
         self.strategy = AdaptiveStrategy()
         self.symbol = "NSE:NIFTY26MARFUT"
 
-    def _seed_history(self, n: int = 25, base: float = 22000.0):
-        """Feed enough candles so indicators are ready, but not enough to trigger a trade."""
+    def _seed_history(self, n: int = 40, base: float = 22000.0):
+        """Feed enough candles so MACD indicators are ready (needs 35+)."""
         candles = _build_history(n, base)
         for c in candles:
             self.strategy._candle_history.setdefault(self.symbol, []).append(c)
-        # Warm up EMA state so prev_fast/prev_slow are set
+        # Warm up MACD state so prev values are set
+        from modules.strategy.adaptive_strategy import macd
         closes = [c["close"] for c in candles]
-        self.strategy._prev_fast_ema[self.symbol] = ema(closes[:-1], 9)
-        self.strategy._prev_slow_ema[self.symbol] = ema(closes[:-1], 21)
+        ml, sl, hist = macd(closes[:-1])
+        self.strategy._prev_macd_line[self.symbol] = ml
+        self.strategy._prev_signal_line[self.symbol] = sl
+        self.strategy._prev_histogram[self.symbol] = hist
         # Prime day/state tracking
         self.strategy._current_day[self.symbol] = "2026-03-04"
         self.strategy._today_candles[self.symbol] = list(candles)
@@ -252,29 +275,24 @@ class TestOnCandle:
 
     def test_no_signal_insufficient_history(self):
         strategy = AdaptiveStrategy()
-        # Only 10 candles — not enough for EMA-21
-        for c in _build_history(10):
+        # Only 20 candles — not enough for MACD (needs 35)
+        for c in _build_history(20):
             strategy._candle_history.setdefault(self.symbol, []).append(c)
         candle = _candle(22200, open_=22150, timestamp=_ts(10, 0), symbol=self.symbol)
         assert strategy.on_candle(candle) is None
 
     def test_buy_signal_emitted_on_bullish_crossover(self):
         self._seed_history(base=22000)
-        # Set up a bullish EMA crossover: fast was below slow, now above
-        self.strategy._prev_fast_ema[self.symbol] = 22090.0
-        self.strategy._prev_slow_ema[self.symbol] = 22100.0  # fast < slow before
+        # Set up a bullish MACD crossover: prev MACD was below signal, now above
+        self.strategy._prev_macd_line[self.symbol] = -2.0
+        self.strategy._prev_signal_line[self.symbol] = 1.0
 
-        # Price jumps — fast EMA will now be above slow EMA
         bullish_candle = _candle(
             close=22300, open_=22200,  # strong bullish body
             high=22310, low=22190,
             timestamp=_ts(10, 30),
             symbol=self.symbol,
         )
-        # Inject enough candles so EMA-9 > EMA-21
-        closes = [22000 + i * 15 for i in range(25)]  # strong uptrend
-        for i, c in enumerate(self.strategy._today_candles[self.symbol]):
-            c["close"] = closes[i] if i < len(closes) else closes[-1]
         self.strategy._today_candles[self.symbol].append(bullish_candle)
 
         with patch.object(
@@ -377,7 +395,7 @@ class TestOnCandle:
         strategy._first_hour_direction[symbol] = "BEARISH"
         strategy._traded_today[symbol] = 0
 
-        for c in _build_history(25, base_price=5000.0, symbol=symbol):
+        for c in _build_history(40, base_price=5000.0, symbol=symbol):
             strategy._candle_history.setdefault(symbol, []).append(c)
 
         late_candle = _candle(

@@ -15,7 +15,6 @@ from core.logger import get_logger, get_trade_logger
 log = get_logger("options_executor")
 trade_log = get_trade_logger()
 
-NIFTY_LOT_SIZE = 25
 STRIKE_INTERVAL = 50
 
 
@@ -24,59 +23,53 @@ def round_to_strike(price: float) -> int:
     return int(round(price / STRIKE_INTERVAL) * STRIKE_INTERVAL)
 
 
-def get_weekly_expiry_symbol(strike: int, option_type: str, expiry_str: str) -> str:
-    """Build Kite option trading symbol.
-
-    Example: NIFTY2522027600CE
-    Format: NIFTY + YY + M + DD (or MMM for monthly) + strike + CE/PE
-
-    Args:
-        strike: ATM strike price
-        option_type: 'CE' or 'PE'
-        expiry_str: Date string like '2026-02-27' (next Thursday)
-    """
-    # Kite uses a specific format — we'll resolve via instruments API instead
-    # This is a fallback format builder
-    return f"NIFTY{expiry_str}{strike}{option_type}"
-
-
 class OptionsExecutor:
-    """Manages options order placement and position tracking for straddles."""
+    """Manages options order placement and position tracking."""
 
     def __init__(self, kite=None):
         self.kite = kite
         self.positions: Dict[str, Dict[str, Any]] = {}  # keyed by "CE" / "PE"
-        self.daily_pnl: float = 0.0
+        # Cache instruments list by date to avoid repeated 50k-record HTTP calls
+        self._instr_cache: Dict[str, list] = {}  # date_str -> instruments list
 
-    def _resolve_option_symbols(self, strike: int) -> Dict[str, str]:
-        """Resolve CE and PE trading symbols from Kite instruments.
+    # ── Instrument resolution ──────────────────────────────────────────
 
-        Picks the nearest expiry date >= today for each leg, so the
-        correct weekly contract is selected even when monthly options
-        for the same strike appear earlier in the instruments list.
+    def _fetch_nfo_instruments(self) -> list:
+        """Fetch NFO instruments from Kite, using a daily in-process cache."""
+        today = date.today().isoformat()
+        if today not in self._instr_cache:
+            self._instr_cache.clear()  # drop previous day's cache
+            self._instr_cache[today] = self.kite.instruments("NFO")
+        return self._instr_cache[today]
 
-        Returns dict like {"CE": "NFO:NIFTY26FEB27600CE", "PE": "NFO:NIFTY26FEB27600PE"}
+    def _resolve_symbols_sync(self, strike: int) -> Dict[str, Optional[str]]:
+        """Resolve CE and PE trading symbols from the cached instruments list.
+
+        Picks the nearest expiry >= today for each leg (weekly before monthly).
+        Returns dict like {"CE": "NFO:NIFTY26MAY27600CE", "PE": "NFO:NIFTY26MAY27600PE"}.
         """
         if not self.kite:
-            return {}
+            return {"CE": None, "PE": None}
 
         try:
-            instruments = self.kite.instruments("NFO")
+            instruments = self._fetch_nfo_instruments()
             today = date.today()
-            ce_symbol = None
-            ce_expiry = None
-            pe_symbol = None
-            pe_expiry = None
+            ce_symbol: Optional[str] = None
+            ce_expiry: Optional[date] = None
+            pe_symbol: Optional[str] = None
+            pe_expiry: Optional[date] = None
 
             for inst in instruments:
-                if not (inst["name"] == "NIFTY"
-                        and inst["instrument_type"] in ("CE", "PE")
-                        and inst["strike"] == strike):
+                if not (
+                    inst["name"] == "NIFTY"
+                    and inst["instrument_type"] in ("CE", "PE")
+                    and inst["strike"] == strike
+                ):
                     continue
 
-                expiry = inst.get("expiry")  # datetime.date from Kite
+                expiry = inst.get("expiry")
                 if not expiry or expiry < today:
-                    continue  # skip expired contracts
+                    continue
 
                 ts = inst["tradingsymbol"]
                 if inst["instrument_type"] == "CE":
@@ -91,12 +84,19 @@ class OptionsExecutor:
             return {"CE": ce_symbol, "PE": pe_symbol}
         except Exception as e:
             log.error(f"Failed to resolve option symbols: {e}")
-            return {}
+            return {"CE": None, "PE": None}
 
-    async def enter_straddle(self, spot_price: float, lot_size: int = NIFTY_LOT_SIZE):
+    async def _resolve_option_symbols(self, strike: int) -> Dict[str, Optional[str]]:
+        """Async wrapper — runs the blocking Kite HTTP call off the event loop."""
+        return await asyncio.to_thread(self._resolve_symbols_sync, strike)
+
+    # ── Straddle (short sell CE + PE) ─────────────────────────────────
+
+    async def enter_straddle(self, spot_price: float, lot_size: int = None):
         """Place short straddle: sell ATM CE + sell ATM PE."""
+        lot_size = lot_size or settings.OPTIONS_LOT_SIZE
         strike = round_to_strike(spot_price)
-        symbols = self._resolve_option_symbols(strike)
+        symbols = await self._resolve_option_symbols(strike)
 
         if not symbols.get("CE") or not symbols.get("PE"):
             log.error(f"Could not resolve option symbols for strike {strike}")
@@ -104,13 +104,12 @@ class OptionsExecutor:
 
         log.info(f"Entering straddle: Strike={strike} | CE={symbols['CE']} PE={symbols['PE']}")
 
-        # Place both sell orders
         for opt_type in ("CE", "PE"):
             symbol = symbols[opt_type]
             exchange, tradingsymbol = symbol.split(":")
-
             try:
-                order_id = self.kite.place_order(
+                order_id = await asyncio.to_thread(
+                    self.kite.place_order,
                     variety=self.kite.VARIETY_REGULAR,
                     exchange=exchange,
                     tradingsymbol=tradingsymbol,
@@ -131,53 +130,17 @@ class OptionsExecutor:
                 trade_log.info(f"STRADDLE SELL {opt_type} | {symbol} | qty={lot_size}")
             except Exception as e:
                 log.error(f"Failed to place {opt_type} order: {e}")
-                # If CE placed but PE fails, close CE immediately
                 if opt_type == "PE" and "CE" in self.positions:
                     await self.close_leg("CE", "PE_ORDER_FAILED")
 
         return len(self.positions) == 2
 
-    async def close_leg(self, leg: str, reason: str):
-        """Close a single leg (CE or PE)."""
-        pos = self.positions.get(leg)
-        if not pos:
-            return
+    # ── Directional (buy single CE or PE) ─────────────────────────────
 
-        symbol = pos["symbol"]
-        exchange, tradingsymbol = symbol.split(":")
-
-        try:
-            order_id = self.kite.place_order(
-                variety=self.kite.VARIETY_REGULAR,
-                exchange=exchange,
-                tradingsymbol=tradingsymbol,
-                transaction_type=self.kite.TRANSACTION_TYPE_BUY,  # Buy back to close
-                quantity=pos["quantity"],
-                product=self.kite.PRODUCT_MIS,
-                order_type=self.kite.ORDER_TYPE_MARKET,
-            )
-            log.info(f"CLOSED {leg} | {symbol} | reason={reason} | order_id={order_id}")
-            trade_log.info(f"STRADDLE CLOSE {leg} | {symbol} | reason={reason}")
-        except Exception as e:
-            # Position may already be closed by exchange SL-M — clear internal state anyway
-            log.warning(f"Close order rejected for {leg} (may be already filled by SL-M): {e}")
-        finally:
-            self.positions.pop(leg, None)
-
-    async def close_all(self, reason: str = "EOD_EXIT"):
-        """Close all open option legs."""
-        for leg in list(self.positions.keys()):
-            await self.close_leg(leg, reason)
-
-    async def enter_directional(self, strike: int, option_type: str, lot_size: int = NIFTY_LOT_SIZE):
-        """Place a single BUY order for a CE or PE option (directional buying).
-
-        Args:
-            strike: ATM strike price
-            option_type: 'CE' or 'PE'
-            lot_size: number of units (default 75 for Nifty)
-        """
-        symbols = self._resolve_option_symbols(strike)
+    async def enter_directional(self, strike: int, option_type: str, lot_size: int = None) -> bool:
+        """Place a single BUY order for a CE or PE option."""
+        lot_size = lot_size or settings.OPTIONS_LOT_SIZE
+        symbols = await self._resolve_option_symbols(strike)
         symbol = symbols.get(option_type)
 
         if not symbol:
@@ -186,7 +149,8 @@ class OptionsExecutor:
 
         exchange, tradingsymbol = symbol.split(":")
         try:
-            order_id = self.kite.place_order(
+            order_id = await asyncio.to_thread(
+                self.kite.place_order,
                 variety=self.kite.VARIETY_REGULAR,
                 exchange=exchange,
                 tradingsymbol=tradingsymbol,
@@ -211,15 +175,15 @@ class OptionsExecutor:
             return False
 
     async def close_directional(self, option_type: str, reason: str = "EXIT"):
-        """Close (sell) a single directional CE or PE position."""
+        """Close (sell back) a single directional CE or PE position."""
         await self.close_leg(option_type, reason)
 
-    async def place_sl_order(
-        self, option_type: str, stop_premium: float
-    ) -> Optional[str]:
-        """Place an exchange-level SL-M sell order on the option at stop_premium.
+    # ── Stop-loss management ───────────────────────────────────────────
 
-        Fires at the exchange even if the bot crashes — hard protection.
+    async def place_sl_order(self, option_type: str, stop_premium: float) -> Optional[str]:
+        """Place an exchange-level SL-M sell order at stop_premium.
+
+        Hard protection: fires at the exchange even if the bot crashes.
         """
         pos = self.positions.get(option_type)
         if not pos or not self.kite:
@@ -229,7 +193,8 @@ class OptionsExecutor:
         exchange, tradingsymbol = symbol.split(":")
 
         try:
-            sl_order_id = self.kite.place_order(
+            sl_order_id = await asyncio.to_thread(
+                self.kite.place_order,
                 variety=self.kite.VARIETY_REGULAR,
                 exchange=exchange,
                 tradingsymbol=tradingsymbol,
@@ -249,17 +214,70 @@ class OptionsExecutor:
             return None
 
     async def cancel_sl_order(self, sl_order_id: Optional[str]):
-        """Cancel a pending SL-M order (call before normal close to avoid double-fill)."""
+        """Cancel a pending SL-M order before issuing a normal close."""
         if not sl_order_id or not self.kite:
             return
         try:
-            self.kite.cancel_order(
+            await asyncio.to_thread(
+                self.kite.cancel_order,
                 variety=self.kite.VARIETY_REGULAR,
                 order_id=sl_order_id,
             )
             log.info(f"OPTIONS SL-M cancelled | sl_order_id={sl_order_id}")
         except Exception as e:
             log.warning(f"Failed to cancel options SL-M {sl_order_id}: {e}")
+
+    async def check_sl_filled(self, sl_order_id: Optional[str]) -> bool:
+        """Return True if the SL-M order has already been filled by the exchange.
+
+        Prevents sending a redundant close order when the SL-M already squared off
+        the position, which would otherwise open a new accidental short.
+        """
+        if not sl_order_id or not self.kite:
+            return False
+        try:
+            history = await asyncio.to_thread(self.kite.order_history, sl_order_id)
+            if history:
+                last_status = history[-1].get("status", "")
+                return last_status == "COMPLETE"
+        except Exception as e:
+            log.warning(f"Could not check SL-M status for {sl_order_id}: {e}")
+        return False
+
+    # ── Leg management ─────────────────────────────────────────────────
+
+    async def close_leg(self, leg: str, reason: str):
+        """Close a single leg (CE or PE)."""
+        pos = self.positions.get(leg)
+        if not pos:
+            return
+
+        symbol = pos["symbol"]
+        exchange, tradingsymbol = symbol.split(":")
+
+        try:
+            order_id = await asyncio.to_thread(
+                self.kite.place_order,
+                variety=self.kite.VARIETY_REGULAR,
+                exchange=exchange,
+                tradingsymbol=tradingsymbol,
+                transaction_type=self.kite.TRANSACTION_TYPE_BUY,
+                quantity=pos["quantity"],
+                product=self.kite.PRODUCT_MIS,
+                order_type=self.kite.ORDER_TYPE_MARKET,
+            )
+            log.info(f"CLOSED {leg} | {symbol} | reason={reason} | order_id={order_id}")
+            trade_log.info(f"STRADDLE CLOSE {leg} | {symbol} | reason={reason}")
+        except Exception as e:
+            # Position may already be closed by exchange SL-M — clear state anyway
+            log.warning(f"Close order rejected for {leg} (may be already filled by SL-M): {e}")
+        finally:
+            self.positions.pop(leg, None)
+
+    async def close_all(self, reason: str = "EOD_EXIT"):
+        """Close all open option legs."""
+        for leg in list(self.positions.keys()):
+            await self.close_leg(leg, reason)
 
     @property
     def has_position(self) -> bool:

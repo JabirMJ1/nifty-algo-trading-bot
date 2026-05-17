@@ -1,5 +1,6 @@
 """Circuit breaker — daily loss limit kill switch."""
 
+import asyncio
 import json
 from typing import Optional
 from core.config import settings
@@ -25,19 +26,21 @@ class CircuitBreaker:
         self._trades_today: int = 0
 
     async def _save_state(self):
-        """Persist state to Redis."""
+        """Persist state to Redis (non-blocking)."""
         if self._redis:
             state = json.dumps({
                 "kill_switch": self._kill_switch,
                 "daily_pnl": self._daily_pnl,
                 "trades_today": self._trades_today,
             })
-            self._redis.set(self.REDIS_KEY, state, ex=86400)
+            await asyncio.to_thread(
+                self._redis.set, self.REDIS_KEY, state, ex=86400
+            )
 
     async def _load_state(self):
-        """Load state from Redis."""
+        """Load state from Redis (non-blocking)."""
         if self._redis:
-            data = self._redis.get(self.REDIS_KEY)
+            data = await asyncio.to_thread(self._redis.get, self.REDIS_KEY)
             if data:
                 state = json.loads(data)
                 self._kill_switch = state["kill_switch"]

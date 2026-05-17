@@ -105,8 +105,14 @@ class TradingBot:
 
         # Options directional buyer — created before pnl_reporter so it can be passed in
         if settings.TRADE_OPTIONS:
+            kite_for_options = self.kite_feed.get_kite() if not settings.PAPER_TRADE else None
+            if not settings.PAPER_TRADE and kite_for_options is None:
+                raise RuntimeError(
+                    "TRADE_OPTIONS=True with PAPER_TRADE=False but Kite session is None. "
+                    "Run generate_token.py and ensure KITE_ACCESS_TOKEN is set."
+                )
             self.options_buyer = OptionsDirectionalBuyer(
-                kite=self.kite_feed.get_kite() if not settings.PAPER_TRADE else None,
+                kite=kite_for_options,
                 circuit_breaker=self.circuit_breaker,
             )
             log.info("Options mode: DIRECTIONAL BUYING (CE/PE)")

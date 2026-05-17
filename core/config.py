@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     STOP_ATR_MULTIPLIER: float = 1.5
     TRAIL_ATR_MULTIPLIER: float = 1.0
     TARGET_ATR_MULTIPLIER: float = 3.0
+    # Fixed profit target as % of current capital (0 = use ATR-based target only)
+    PROFIT_TARGET_PCT: float = 8.0
 
     # Slippage simulation (ticks)
     SLIPPAGE_TICKS: int = 2
@@ -65,6 +67,9 @@ class Settings(BaseSettings):
 
     # Healthchecks.io dead-man's switch (optional — leave empty to disable)
     HEALTHCHECKS_URL: str = ""
+
+    # GitHub deploy token (used by AWS EC2 bootstrap to pull the repo)
+    BOT_REPO_TOKEN: str = ""
 
     # Options — directional buying (CE/PE)
     TRADE_OPTIONS: bool = False        # True → use OptionsDirectionalBuyer instead of futures

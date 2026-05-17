@@ -10,12 +10,12 @@ In live mode, actual orders are placed via OptionsExecutor.
 Exit conditions (whichever hits first):
   - Stop-loss : premium falls to (1 - OPTIONS_STOP_PCT/100) × entry_premium
   - Target    : premium reaches OPTIONS_TARGET_MULT × entry_premium
-  - EOD       : 15:15 IST force-close
+  - EOD       : scheduler force-close at 15:30 IST (via close_all_positions)
 """
 
 import math
 import uuid
-from datetime import datetime, time, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from core.config import settings
@@ -26,9 +26,14 @@ log = get_logger("options_buyer")
 trade_log = get_trade_logger()
 
 _IST = timezone(timedelta(hours=5, minutes=30))
-_EOD_EXIT = time(15, 15)
 _STRIKE_INTERVAL = 50
 _MARKET_HOURS_PER_DAY = 6.5  # 9:15 to 15:45
+
+# Nifty weekly options expire on Tuesday (NSE change effective 2025)
+_EXPIRY_WEEKDAY = 1  # Monday=0, Tuesday=1
+
+# Patterns that identify a Nifty underlying (futures or index)
+_NIFTY_PATTERNS = ("NIFTY",)
 
 
 def _round_strike(price: float) -> int:
@@ -36,28 +41,32 @@ def _round_strike(price: float) -> int:
     return int(round(price / _STRIKE_INTERVAL) * _STRIKE_INTERVAL)
 
 
-def _dte_from_timestamp(ts) -> float:
-    """Days-to-expiry: trading days until next Thursday (weekly expiry)."""
-    if not hasattr(ts, "weekday"):
+def _parse_timestamp(ts) -> Optional[datetime]:
+    """Parse a timestamp that may be a datetime or an ISO string."""
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        return ts
+    if isinstance(ts, str):
+        try:
+            return datetime.fromisoformat(ts)
+        except ValueError:
+            return None
+    return None
+
+
+def _dte_from_timestamp(ts: Optional[datetime]) -> float:
+    """Days-to-expiry: calendar days until next Tuesday (Nifty weekly expiry)."""
+    if ts is None:
         return 2.0
-    # weekday(): Mon=0 … Thu=3 … Sun=6
-    days_to_thursday = (3 - ts.weekday()) % 7
-    if days_to_thursday == 0:
+    days_to_expiry = (_EXPIRY_WEEKDAY - ts.weekday()) % 7
+    if days_to_expiry == 0:
         return 0.1  # expiry day — very little time left
-    return float(days_to_thursday)
+    return float(days_to_expiry)
 
 
 def _estimate_premium(spot: float, dte: float) -> float:
-    """Estimate ATM option premium from spot and DTE.
-
-    Calibrated formula from straddle_920.py:
-        premium ≈ spot × 0.006 × √DTE
-
-    Approximate real-world checks:
-        DTE=5 → ~180-220 pts   (0.006 × √5 ≈ 0.0134 × 23000 ≈ 308, reduced by liquidity/IV)
-        DTE=2 → ~130-160 pts
-        DTE=0 → ~40-60 pts
-    """
+    """Estimate ATM option premium: spot × 0.006 × √DTE."""
     if dte <= 0:
         dte = 0.1
     return round(spot * 0.006 * math.sqrt(dte), 2)
@@ -71,25 +80,26 @@ def _current_premium(
     hours_elapsed: float,
     dte: float,
 ) -> float:
-    """Estimate current option premium using a simple delta + theta model.
-
-    Delta ≈ 0.5 for ATM options.
-    Theta decay ≈ 30% of entry premium per full trading day.
-    """
-    # Delta P&L
+    """Estimate current premium using delta (0.5 ATM) + theta (30%/day) model."""
     spot_move = current_spot - entry_spot
-    if option_type == "CE":
-        delta_pnl = spot_move * 0.5
-    else:  # PE
-        delta_pnl = -spot_move * 0.5
+    delta_pnl = spot_move * 0.5 if option_type == "CE" else -spot_move * 0.5
 
-    # Theta decay (fraction of day elapsed)
     day_fraction = hours_elapsed / (_MARKET_HOURS_PER_DAY * max(dte, 0.1))
     theta_decay = entry_premium * 0.3 * day_fraction
 
-    estimated = entry_premium + delta_pnl - theta_decay
-    # Floor at 5% of entry (option won't go to exactly zero during the day)
-    return max(entry_premium * 0.05, estimated)
+    return max(entry_premium * 0.05, entry_premium + delta_pnl - theta_decay)
+
+
+def _hours_since(entry_time, current_time) -> float:
+    """Hours elapsed between two timestamps; handles both datetime and ISO string."""
+    entry_dt = _parse_timestamp(entry_time) if not isinstance(entry_time, datetime) else entry_time
+    current_dt = _parse_timestamp(current_time) if not isinstance(current_time, datetime) else current_time
+    if entry_dt is None or current_dt is None:
+        return 1.0
+    try:
+        return max(0.0, (current_dt.timestamp() - entry_dt.timestamp()) / 3600)
+    except Exception:
+        return 1.0
 
 
 class OptionsDirectionalBuyer:
@@ -100,6 +110,12 @@ class OptionsDirectionalBuyer:
     """
 
     def __init__(self, kite=None, circuit_breaker=None):
+        if not settings.PAPER_TRADE and kite is None:
+            raise ValueError(
+                "Live options trading requires a valid Kite session. "
+                "kite=None with PAPER_TRADE=False — check access token."
+            )
+
         self._kite = kite
         self._breaker = circuit_breaker
         self.balance = float(settings.CAPITAL)
@@ -111,19 +127,41 @@ class OptionsDirectionalBuyer:
         self.trade_history: List[Dict[str, Any]] = []
         self._executor = None  # OptionsExecutor (live mode only)
 
-        if not settings.PAPER_TRADE and kite:
+        if not settings.PAPER_TRADE:
             from modules.execution.options_executor import OptionsExecutor
             self._executor = OptionsExecutor(kite=kite)
+
+        self._validate_risk_parameters()
+
+    def _validate_risk_parameters(self):
+        """Warn if a single worst-case stop-out exceeds the daily loss limit."""
+        # Typical Nifty ATM premium at DTE=2
+        typical_premium = 24000 * 0.006 * math.sqrt(2)
+        max_single_loss = typical_premium * self.stop_pct * self.lot_size
+        daily_limit = settings.CAPITAL * (settings.MAX_DAILY_LOSS_PCT / 100)
+        if max_single_loss > daily_limit:
+            log.warning(
+                f"RISK CONFIG MISMATCH: worst-case options loss ~Rs.{max_single_loss:.0f} "
+                f"exceeds daily limit Rs.{daily_limit:.0f} "
+                f"(CAPITAL={settings.CAPITAL}, MAX_DAILY_LOSS_PCT={settings.MAX_DAILY_LOSS_PCT}%). "
+                f"Circuit breaker will trip on the first stop-out. "
+                f"Raise MAX_DAILY_LOSS_PCT or reduce OPTIONS_STOP_PCT."
+            )
 
     def start(self):
         event_bus.subscribe(EventType.SIGNAL, self.on_signal)
         event_bus.subscribe(EventType.CANDLE, self.on_candle)
+        event_bus.subscribe(EventType.TICK, self.on_tick)
         event_bus.subscribe(EventType.KILL_SWITCH, self.on_kill_switch)
         log.info(
             f"Options directional buyer started | "
             f"lot={self.lot_size} stop={self.stop_pct:.0%} target={self.target_mult}x | "
             f"mode={'PAPER' if settings.PAPER_TRADE else 'LIVE'}"
         )
+
+    def _is_nifty_instrument(self, symbol: str) -> bool:
+        upper = symbol.upper()
+        return any(p in upper for p in _NIFTY_PATTERNS)
 
     async def on_signal(self, signal_data: Dict[str, Any]):
         """React to a BUY or SELL signal from AdaptiveStrategy."""
@@ -135,14 +173,19 @@ class OptionsDirectionalBuyer:
         if direction not in ("BUY", "SELL"):
             return
 
-        # If already in a position, check for reversal
+        # Only trade Nifty options
+        instrument = signal_data.get("instrument", "")
+        if not self._is_nifty_instrument(instrument):
+            log.debug(f"Options buyer skipping non-Nifty signal: {instrument}")
+            return
+
+        # Existing position handling
         if self._position:
             existing_type = self._position["option_type"]
             new_type = "CE" if direction == "BUY" else "PE"
             if existing_type == new_type:
-                log.info(f"Already holding {existing_type} — skipping duplicate signal")
+                log.info(f"Already holding {existing_type} — skipping duplicate {direction} signal")
                 return
-            # Opposite direction — close first
             await self._close_position("SIGNAL_REVERSAL")
 
         spot = signal_data.get("price", 0.0)
@@ -152,13 +195,23 @@ class OptionsDirectionalBuyer:
 
         option_type = "CE" if direction == "BUY" else "PE"
         strike = _round_strike(spot)
-        ts = signal_data.get("timestamp", datetime.now(_IST))
+
+        # Signal timestamps are serialised as ISO strings by Signal.to_event_data()
+        ts = _parse_timestamp(signal_data.get("timestamp")) or datetime.now(_IST)
         dte = _dte_from_timestamp(ts)
         entry_premium = _estimate_premium(spot, dte)
 
-        position_id = str(uuid.uuid4())[:8]
-        self._position = {
-            "id": position_id,
+        # Reject if cost exceeds available balance
+        cost = entry_premium * self.lot_size
+        if cost > self.balance:
+            log.warning(
+                f"Insufficient balance Rs.{self.balance:.0f} for {option_type} "
+                f"(cost=Rs.{cost:.0f}) — skipping"
+            )
+            return
+
+        position_data: Dict[str, Any] = {
+            "id": str(uuid.uuid4())[:8],
             "option_type": option_type,
             "strike": strike,
             "entry_spot": spot,
@@ -168,9 +221,24 @@ class OptionsDirectionalBuyer:
             "lot_size": self.lot_size,
             "stop_premium": entry_premium * (1 - self.stop_pct),
             "target_premium": entry_premium * self.target_mult,
+            "sl_order_id": None,
         }
 
-        cost = entry_premium * self.lot_size
+        # Live mode: place entry order first; abort if it fails
+        if self._executor:
+            success = await self._executor.enter_directional(strike, option_type, self.lot_size)
+            if not success:
+                log.error(f"Entry order failed for {option_type} strike={strike} — position not opened")
+                return
+            sl_order_id = await self._executor.place_sl_order(
+                option_type, position_data["stop_premium"]
+            )
+            position_data["sl_order_id"] = sl_order_id
+
+        # Commit position only after successful entry (or in paper mode)
+        self._position = position_data
+        position_id = position_data["id"]
+
         log.info(
             f"OPTIONS {option_type} ENTRY | strike={strike} | "
             f"premium={entry_premium:.1f} | lot={self.lot_size} | "
@@ -180,14 +248,6 @@ class OptionsDirectionalBuyer:
             f"OPEN | {option_type} NIFTY{strike}{option_type} | "
             f"premium={entry_premium:.1f} qty={self.lot_size} | spot={spot:.0f}"
         )
-
-        # Live mode: place actual order + exchange-level SL-M stop
-        if self._executor:
-            await self._executor.enter_directional(strike, option_type, self.lot_size)
-            sl_order_id = await self._executor.place_sl_order(
-                option_type, self._position["stop_premium"]
-            )
-            self._position["sl_order_id"] = sl_order_id
 
         await event_bus.publish(
             EventType.TRADE,
@@ -199,59 +259,76 @@ class OptionsDirectionalBuyer:
                 "price": entry_premium,
                 "quantity": self.lot_size,
                 "strategy": signal_data.get("strategy_name", "adaptive"),
-                "stop_loss": self._position["stop_premium"],
-                "target": self._position["target_premium"],
+                "stop_loss": position_data["stop_premium"],
+                "target": position_data["target_premium"],
             },
         )
 
-    async def on_candle(self, candle_data: Dict[str, Any]):
-        """Check stop/target/EOD on every 15-min candle."""
+    async def on_tick(self, tick_data: Dict[str, Any]):
+        """Check stop/target on every tick for intraday protection."""
         if not self._position:
             return
-
-        ts = candle_data.get("timestamp")
-        candle_time = ts.time() if hasattr(ts, "time") else None
-
-        # EOD force-close
-        if candle_time and candle_time >= _EOD_EXIT:
-            await self._close_position("EOD_EXIT", candle_data)
+        if tick_data.get("warmup"):
+            return
+        # Only react to ticks from our Nifty underlying
+        if not self._is_nifty_instrument(tick_data.get("symbol", "")):
             return
 
-        spot = candle_data.get("close", 0.0)
+        spot = tick_data.get("last_price", 0.0)
         if spot <= 0:
             return
 
-        # Estimate current option value
-        entry_time = self._position["entry_time"]
-        if hasattr(ts, "timestamp") and hasattr(entry_time, "timestamp"):
-            hours_elapsed = (ts.timestamp() - entry_time.timestamp()) / 3600
-        else:
-            hours_elapsed = 1.0
+        ts = _parse_timestamp(tick_data.get("timestamp"))
+        hours_elapsed = _hours_since(self._position["entry_time"], ts) if ts else 1.0
 
         current_prem = _current_premium(
             entry_premium=self._position["entry_premium"],
             entry_spot=self._position["entry_spot"],
             current_spot=spot,
             option_type=self._position["option_type"],
-            hours_elapsed=max(0.0, hours_elapsed),
+            hours_elapsed=hours_elapsed,
             dte=self._position["dte"],
         )
 
-        # Check stop
         if current_prem <= self._position["stop_premium"]:
-            await self._close_position("STOP_HIT", candle_data, current_prem)
+            await self._close_position("STOP_HIT", exit_premium=current_prem, spot=spot, ts=ts)
+        elif current_prem >= self._position["target_premium"]:
+            await self._close_position("TARGET_HIT", exit_premium=current_prem, spot=spot, ts=ts)
+
+    async def on_candle(self, candle_data: Dict[str, Any]):
+        """Check stop/target on candle close (fallback to tick-based checks)."""
+        if candle_data.get("warmup"):
+            return
+        if not self._position:
             return
 
-        # Check target
-        if current_prem >= self._position["target_premium"]:
-            await self._close_position("TARGET_HIT", candle_data, current_prem)
+        spot = candle_data.get("close", 0.0)
+        if spot <= 0:
             return
+
+        ts = _parse_timestamp(candle_data.get("timestamp"))
+        hours_elapsed = _hours_since(self._position["entry_time"], ts)
+
+        current_prem = _current_premium(
+            entry_premium=self._position["entry_premium"],
+            entry_spot=self._position["entry_spot"],
+            current_spot=spot,
+            option_type=self._position["option_type"],
+            hours_elapsed=hours_elapsed,
+            dte=self._position["dte"],
+        )
+
+        if current_prem <= self._position["stop_premium"]:
+            await self._close_position("STOP_HIT", exit_premium=current_prem, spot=spot, ts=ts)
+        elif current_prem >= self._position["target_premium"]:
+            await self._close_position("TARGET_HIT", exit_premium=current_prem, spot=spot, ts=ts)
 
     async def _close_position(
         self,
         reason: str,
-        candle: Optional[Dict[str, Any]] = None,
         exit_premium: Optional[float] = None,
+        spot: Optional[float] = None,
+        ts=None,
     ):
         """Close the open option position and record P&L."""
         pos = self._position
@@ -260,25 +337,17 @@ class OptionsDirectionalBuyer:
         self._position = None
 
         if exit_premium is None:
-            # Estimate from candle close if available
-            if candle:
-                spot = candle.get("close", pos["entry_spot"])
-                ts = candle.get("timestamp")
-                entry_time = pos["entry_time"]
-                if hasattr(ts, "timestamp") and hasattr(entry_time, "timestamp"):
-                    hours = max(0.0, (ts.timestamp() - entry_time.timestamp()) / 3600)
-                else:
-                    hours = 1.0
+            if spot and spot > 0:
+                hours = _hours_since(pos["entry_time"], ts)
                 exit_premium = _current_premium(
                     pos["entry_premium"], pos["entry_spot"], spot,
                     pos["option_type"], hours, pos["dte"]
                 )
             else:
-                exit_premium = pos["entry_premium"]  # flat fallback
+                exit_premium = pos["entry_premium"]
 
         pnl = (exit_premium - pos["entry_premium"]) * pos["lot_size"]
-        # Deduct brokerage (flat Rs.40 round-trip for options)
-        pnl -= 40.0
+        pnl -= 40.0  # flat brokerage round-trip
 
         self.balance += pnl
         if self._breaker:
@@ -307,10 +376,14 @@ class OptionsDirectionalBuyer:
             f"PnL={pnl:.0f} | reason={reason}"
         )
 
-        # Live mode: cancel standing SL-M then close via executor
+        # Live mode: skip cancel+close if the exchange SL-M already squared off the position
         if self._executor:
-            await self._executor.cancel_sl_order(pos.get("sl_order_id"))
-            await self._executor.close_directional(pos["option_type"], reason)
+            sl_already_filled = await self._executor.check_sl_filled(pos.get("sl_order_id"))
+            if sl_already_filled:
+                log.info("SL-M already filled by exchange — skipping manual close order")
+            else:
+                await self._executor.cancel_sl_order(pos.get("sl_order_id"))
+                await self._executor.close_directional(pos["option_type"], reason)
 
         await event_bus.publish(
             EventType.TRADE,
@@ -349,11 +422,14 @@ class OptionsDirectionalBuyer:
 
     async def on_kill_switch(self, data: Dict[str, Any]):
         """Force-close open position when circuit breaker fires."""
-        log.warning(f"KILL_SWITCH received — force-closing options position | reason={data}")
+        log.warning(
+            f"KILL_SWITCH received — force-closing options position | "
+            f"reason={data.get('reason', 'unknown')}"
+        )
         await self.close_all_positions("KILL_SWITCH")
 
     async def close_all_positions(self, reason: str = "SHUTDOWN"):
-        """Force-close any open position (called on graceful shutdown)."""
+        """Force-close any open position (called by scheduler or on shutdown)."""
         if self._position:
             await self._close_position(reason)
 
