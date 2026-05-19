@@ -24,6 +24,7 @@ from modules.state.market_memory import calculate_adx
 from modules.sensory.market_hours import now_ist
 from core.event_bus import EventType, event_bus
 from core.logger import get_logger
+from core.config import settings
 
 log = get_logger("adaptive_strategy")
 
@@ -419,7 +420,7 @@ class AdaptiveStrategy(BaseStrategy):
                 price=price,
                 metadata={
                     "score": buy_score,
-                    "regime": self.vix.current_regime(symbol),
+                    "regime": self.vix.preferred_mode(symbol),
                     "vol": round(self.vix.volatility(symbol), 1),
                     "adx": round(adx, 1),
                     "stoch_rsi": round(current_srsi, 1),
@@ -430,8 +431,8 @@ class AdaptiveStrategy(BaseStrategy):
                     "first_hour": self._first_hour_direction.get(symbol),
                     "gap": round(self.gap.gap_pct(symbol), 2),
                     "vwap": round(current_vwap, 2),
-                    "stop_multiplier": 1.5,
-                    "target_multiplier": 1.5,
+                    "stop_multiplier": settings.STOP_ATR_MULTIPLIER,
+                    "target_multiplier": settings.TARGET_ATR_MULTIPLIER,
                     "sentiment_score": round(sentiment.get("score", 0.0), 2),
                     "sentiment_summary": sentiment.get("summary", ""),
                 },
@@ -451,7 +452,7 @@ class AdaptiveStrategy(BaseStrategy):
                 price=price,
                 metadata={
                     "score": sell_score,
-                    "regime": self.vix.current_regime(symbol),
+                    "regime": self.vix.preferred_mode(symbol),
                     "vol": round(self.vix.volatility(symbol), 1),
                     "adx": round(adx, 1),
                     "stoch_rsi": round(current_srsi, 1),
@@ -462,8 +463,8 @@ class AdaptiveStrategy(BaseStrategy):
                     "first_hour": self._first_hour_direction.get(symbol),
                     "gap": round(self.gap.gap_pct(symbol), 2),
                     "vwap": round(current_vwap, 2),
-                    "stop_multiplier": 1.5,
-                    "target_multiplier": 1.5,
+                    "stop_multiplier": settings.STOP_ATR_MULTIPLIER,
+                    "target_multiplier": settings.TARGET_ATR_MULTIPLIER,
                     "sentiment_score": round(sentiment.get("score", 0.0), 2),
                     "sentiment_summary": sentiment.get("summary", ""),
                 },
