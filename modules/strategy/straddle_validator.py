@@ -196,6 +196,7 @@ class StraddleValidator:
         dte = _days_to_expiry(now)
         model_premium = _estimate_premium(spot, dte)
 
+
         # Real option prices
         symbols = self._resolve_option_symbols(strike)
         ce_sym = symbols.get("CE", "")
@@ -223,6 +224,7 @@ class StraddleValidator:
             "weekday": weekday,
             "strike": strike,
             "spot_at_entry": round(spot, 2),
+            "dte": dte,
             "model_premium": model_premium,
             "real_ce": real_ce,
             "real_pe": real_pe,
@@ -277,15 +279,23 @@ class StraddleValidator:
             exit_cost = (eod_ce + eod_pe) * NIFTY_LOT_SIZE
             real_pnl = round(entry_credit - exit_cost, 2)
 
-        # Model P&L: model premium minus intrinsic value at EOD spot
+        # Model P&L: model premium at entry minus modeled exit value.
+        # On non-expiry days options still carry time value at 3:15 PM,
+        # so use _estimate_premium with remaining DTE instead of intrinsic only.
         model_pnl = None
         if self._today["model_premium"] and eod_spot:
             strike = self._today["strike"]
             mp = self._today["model_premium"]
-            ce_val = max(0.0, eod_spot - strike)
-            pe_val = max(0.0, strike - eod_spot)
+            entry_dte = self._today.get("dte", 0)
+            remaining_dte = max(0.0, entry_dte - 1)
+            if remaining_dte > 0:
+                exit_model_ce = _estimate_premium(eod_spot, remaining_dte)
+                exit_model_pe = _estimate_premium(eod_spot, remaining_dte)
+            else:
+                exit_model_ce = max(0.0, eod_spot - strike)
+                exit_model_pe = max(0.0, strike - eod_spot)
             model_pnl = round(
-                (mp - ce_val + mp - pe_val) * NIFTY_LOT_SIZE, 2
+                (mp - exit_model_ce + mp - exit_model_pe) * NIFTY_LOT_SIZE, 2
             )
 
         self._today.update({
