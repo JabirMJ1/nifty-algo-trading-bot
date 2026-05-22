@@ -84,6 +84,26 @@ class KiteFeed:
                     f"(expiry {front['expiry']}) token {token}"
                 )
             else:
+                # Last-chance: NSE:NIFTY with TRADE_OPTIONS=True should live in NFO
+                if exchange == "NSE" and tradingsymbol == "NIFTY" and settings.TRADE_OPTIONS:
+                    nfo_candidates = [
+                        i for i in all_instruments
+                        if i["exchange"] == "NFO"
+                        and i["instrument_type"] == "FUT"
+                        and i["name"] == "NIFTY"
+                        and i.get("expiry")
+                    ]
+                    if nfo_candidates:
+                        front = min(nfo_candidates, key=lambda i: i["expiry"])
+                        resolved_symbol = f"NFO:{front['tradingsymbol']}"
+                        token = front["instrument_token"]
+                        self._instrument_tokens[resolved_symbol] = token
+                        self._token_to_symbol[token] = resolved_symbol
+                        log.warning(
+                            f"Auto-coerced NSE:NIFTY → {resolved_symbol} "
+                            f"(expiry {front['expiry']}) — update INSTRUMENTS to NFO:NIFTY"
+                        )
+                        continue
                 log.warning(f"Could not resolve instrument: {symbol}")
 
         if not self._instrument_tokens:
@@ -232,6 +252,31 @@ class KiteFeed:
         await asyncio.get_event_loop().run_in_executor(
             None, lambda: self.ticker.connect(threaded=True)
         )
+
+    async def force_reconnect(self):
+        """Reconnect the WebSocket without refreshing the token — for silent disconnects."""
+        if self._restarting:
+            return
+        self._restarting = True
+        log.warning("WebSocket force-reconnect triggered (dead feed detected)")
+        try:
+            if self.ticker:
+                self.ticker.close()
+                await asyncio.sleep(2)
+            self.ticker = KiteTicker(settings.KITE_API_KEY, self.kite.access_token)
+            self.ticker.on_ticks = self._on_ticks
+            self.ticker.on_connect = self._on_connect
+            self.ticker.on_close = self._on_close
+            self.ticker.on_error = self._on_error
+            self.ticker.on_reconnect = self._on_reconnect
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.ticker.connect(threaded=True)
+            )
+            log.info("WebSocket force-reconnected successfully")
+        except Exception as e:
+            log.error(f"WebSocket force-reconnect failed: {e}")
+        finally:
+            self._restarting = False
 
     async def stop(self):
         """Stop the WebSocket feed."""

@@ -37,6 +37,12 @@ class CandleBuilder:
         if ts.tzinfo is None:
             ts = utc_to_ist(ts)
 
+        # Kite sends epoch (1970) timestamps on feed initialisation before the first
+        # real exchange tick arrives.  These candles corrupt VWAP and opening-range
+        # calculations, so drop them silently.
+        if ts.year < 2020:
+            return
+
         candle_start = self._get_candle_start(ts)
         candle_end = candle_start + timedelta(minutes=self.interval)
 
@@ -101,6 +107,10 @@ class CandleBuilder:
         # Start from 9:00 AM to capture MCX opening candles
         from_dt = ist.localize(datetime.combine(today, datetime.min.time().replace(hour=9)))
         to_dt = now_ist()
+
+        if to_dt <= from_dt:
+            log.info("Warmup skipped — market has not opened yet (pre-9:00 AM)")
+            return
 
         for symbol, token in instrument_tokens.items():
             try:

@@ -1,8 +1,9 @@
 """Configuration module — all settings loaded from .env via pydantic-settings."""
 
-from typing import List
 from pydantic_settings import BaseSettings
 from pydantic import field_validator, model_validator
+
+_VALID_EXCHANGES = frozenset({"NSE", "NFO", "BSE", "MCX", "CDS", "BFO"})
 
 
 class Settings(BaseSettings):
@@ -74,13 +75,39 @@ class Settings(BaseSettings):
     # Options — directional buying (CE/PE)
     TRADE_OPTIONS: bool = False        # True → use OptionsDirectionalBuyer instead of futures
     OPTIONS_LOT_SIZE: int = 75         # Nifty weekly lot size
-    OPTIONS_STOP_PCT: float = 50.0     # exit if premium drops this % from entry
+    OPTIONS_STOP_PCT: float = 45.0     # exit if premium drops this % from entry
     OPTIONS_TARGET_MULT: float = 2.5   # exit if premium reaches this multiple of entry
 
     # Costs
     BROKERAGE_PER_ORDER: float = 20.0  # rupees
     STT_PCT: float = 0.05
     EXCHANGE_CHARGES_PCT: float = 0.0019
+
+    @field_validator("INSTRUMENTS")
+    @classmethod
+    def _validate_instruments(cls, v: str) -> str:
+        for inst in [i.strip() for i in v.split(",") if i.strip()]:
+            if ":" not in inst:
+                raise ValueError(
+                    f"Invalid instrument '{inst}' — format must be 'EXCHANGE:SYMBOL' "
+                    f"(e.g. NFO:NIFTY, MCX:GOLDPETAL)."
+                )
+            exchange = inst.split(":", 1)[0].upper()
+            if exchange not in _VALID_EXCHANGES:
+                raise ValueError(
+                    f"Invalid exchange '{exchange}' in '{inst}'. "
+                    f"Must be one of {sorted(_VALID_EXCHANGES)}."
+                )
+            # NSE is the equity cash segment — index/futures contracts live on NFO/MCX
+            _NSE_FUTURES_NAMES = ("NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
+            symbol = inst.split(":", 1)[1].upper()
+            if exchange == "NSE" and any(symbol.startswith(n) for n in _NSE_FUTURES_NAMES):
+                raise ValueError(
+                    f"'{inst}' looks like a futures contract but uses the NSE cash segment. "
+                    f"Futures and options on Nifty indices are listed on NFO, not NSE. "
+                    f"Use 'NFO:{inst.split(':', 1)[1]}' instead."
+                )
+        return v
 
     @model_validator(mode="after")
     def _check_live_credentials(self) -> "Settings":

@@ -6,12 +6,13 @@ import aiohttp
 from core.config import settings
 from core.event_bus import event_bus, EventType
 from core.logger import get_logger
-from modules.sensory.market_hours import now_ist
+from modules.sensory.market_hours import now_ist, is_market_open, is_mcx_open
 
 log = get_logger("health_check")
 
 HEARTBEAT_INTERVAL_SEC = 300  # 5 min
 ALERT_THRESHOLD_SEC = 600  # 10 min — alert if no heartbeat
+_RECONNECT_AFTER_DEAD_CHECKS = 3  # force-reconnect after 3 consecutive dead-tick checks (~3 min)
 
 
 class HealthCheck:
@@ -25,6 +26,7 @@ class HealthCheck:
         self._tick_count = 0
         self._last_health_alert: Optional[datetime] = None
         self._health_alert_interval_min = 10  # max 1 alert per 10 min
+        self._consecutive_dead_checks: int = 0
 
     async def on_tick(self, tick_data: Dict[str, Any]):
         """Track last tick time for connectivity monitoring."""
@@ -52,7 +54,27 @@ class HealthCheck:
         # Check for issues
         issues = []
         if not status["websocket_alive"]:
-            issues.append("WebSocket feed appears dead (no ticks in 60s)")
+            self._consecutive_dead_checks += 1
+            issues.append(
+                f"WebSocket feed appears dead (no ticks in 60s, "
+                f"check #{self._consecutive_dead_checks})"
+            )
+            # Force-reconnect after N consecutive dead checks
+            if (
+                self._consecutive_dead_checks >= _RECONNECT_AFTER_DEAD_CHECKS
+                and self._kite_feed
+                and not getattr(self._kite_feed, "_restarting", False)
+            ):
+                log.warning(
+                    f"WebSocket dead for {self._consecutive_dead_checks} consecutive checks "
+                    f"— triggering force-reconnect"
+                )
+                import asyncio
+                asyncio.create_task(self._kite_feed.force_reconnect())
+                self._consecutive_dead_checks = 0
+        else:
+            self._consecutive_dead_checks = 0
+
         if not status["redis_alive"]:
             issues.append("Redis connection failed")
 
@@ -76,15 +98,29 @@ class HealthCheck:
 
         return status
 
+    def _any_market_open(self) -> bool:
+        """True if at least one configured instrument's exchange is currently live."""
+        exchanges = {
+            inst.split(":")[0]
+            for inst in settings.instruments_list
+            if ":" in inst
+        }
+        if exchanges & {"NSE", "NFO", "BSE"}:
+            if is_market_open():
+                return True
+        if "MCX" in exchanges:
+            if is_mcx_open():
+                return True
+        return False
+
     def _check_websocket(self, now) -> bool:
         """Check if WebSocket is alive (received tick in last 60s).
 
-        Returns True (no alert) outside market hours — no ticks expected pre-open
-        or after both NSE and MCX close.
+        Returns True (no alert) when no configured market is open — ticks are
+        not expected pre-open or after close, so silence is correct.
         """
-        ist_time = now.time()  # now is already IST-aware via now_ist()
-        if ist_time < time(9, 0) or ist_time > time(23, 30):
-            return True  # Outside all market hours — silence false alarms
+        if not self._any_market_open():
+            return True
         if self._last_tick_time is None:
             return False
         return (now - self._last_tick_time).total_seconds() < 60

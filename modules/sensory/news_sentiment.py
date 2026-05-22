@@ -282,12 +282,22 @@ class NewsSentimentFeed:
         headlines_text = "\n".join(f"- {h}" for h in headlines)
         user_message = f"Analyze the following {len(headlines)} recent headlines:\n\n{headlines_text}"
 
-        message = await self._client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=300,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}],
-        )
+        for attempt in range(3):
+            try:
+                message = await self._client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=300,
+                    system=_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": user_message}],
+                )
+                break
+            except anthropic.APIStatusError as e:
+                if e.status_code == 529 and attempt < 2:
+                    wait = 30 * (2 ** attempt)  # 30s then 60s
+                    log.warning(f"Claude API overloaded (529) — retrying in {wait}s (attempt {attempt + 1}/3)")
+                    await asyncio.sleep(wait)
+                else:
+                    raise
 
         raw = message.content[0].text.strip()
 

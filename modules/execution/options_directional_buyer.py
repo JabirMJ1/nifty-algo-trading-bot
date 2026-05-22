@@ -140,12 +140,16 @@ class OptionsDirectionalBuyer:
         max_single_loss = typical_premium * self.stop_pct * self.lot_size
         daily_limit = settings.CAPITAL * (settings.MAX_DAILY_LOSS_PCT / 100)
         if max_single_loss > daily_limit:
+            # Compute the highest stop % that keeps worst-case loss within 90% of daily limit
+            safe_stop_pct = math.floor(
+                (daily_limit * 0.9) / (typical_premium * self.lot_size) * 100
+            )
             log.warning(
                 f"RISK CONFIG MISMATCH: worst-case options loss ~Rs.{max_single_loss:.0f} "
                 f"exceeds daily limit Rs.{daily_limit:.0f} "
                 f"(CAPITAL={settings.CAPITAL}, MAX_DAILY_LOSS_PCT={settings.MAX_DAILY_LOSS_PCT}%). "
                 f"Circuit breaker will trip on the first stop-out. "
-                f"Raise MAX_DAILY_LOSS_PCT or reduce OPTIONS_STOP_PCT."
+                f"Set OPTIONS_STOP_PCT={safe_stop_pct} (or lower) in .env to fix this."
             )
 
     def start(self):
