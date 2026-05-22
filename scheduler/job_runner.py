@@ -70,21 +70,11 @@ class JobRunner:
             name="NSE Market Close",
         )
 
-        # MCX force-close (23:20 IST) — close positions 10 min before Zerodha auto-squareoff.
-        # Zerodha squares off MIS positions at 23:20 (10 min before 23:30 MCX close).
-        # Firing at 23:20 ensures we exit on our terms before their auto-squareoff.
-        self.scheduler.add_job(
-            self._on_mcx_close,
-            CronTrigger(hour=23, minute=20, day_of_week="mon-fri", timezone=IST),
-            id="mcx_close",
-            name="MCX Force Close (23:20)",
-        )
-
-        # EOD report (23:35 IST) — after MCX close, covers full day
+        # EOD report (15:35 IST) — 5 min after NSE/NFO close
         if self._reporter:
             self.scheduler.add_job(
                 self._reporter.send_eod_report,
-                CronTrigger(hour=23, minute=35, day_of_week="mon-fri", timezone=IST),
+                CronTrigger(hour=15, minute=35, day_of_week="mon-fri", timezone=IST),
                 id="eod_report",
                 name="EOD Report",
             )
@@ -163,7 +153,7 @@ class JobRunner:
 
         await event_bus.publish(
             EventType.ALERT,
-            {"type": "MARKET_CLOSE", "message": "NSE market closed. NSE positions squared off. MCX continues."},
+            {"type": "MARKET_CLOSE", "message": "NSE/NFO market closed. All positions squared off."},
         )
 
     async def _on_mcx_close(self):
