@@ -449,23 +449,41 @@ class OrderManager:
         await self.close_all_positions("KILL_SWITCH")
 
     def _resolve_starting_capital(self) -> float:
-        """Use the lower of env CAPITAL and actual Kite account balance."""
+        """Use the lower of env CAPITAL and actual Kite account balance.
+
+        Retries up to 3 times with 2-second backoff to handle the window between
+        token refresh completing and the first API call. Falls back to env CAPITAL
+        only after all attempts fail.
+        """
+        import time
         env_capital = float(settings.CAPITAL)
-        try:
-            margins = self.kite.margins(segment="commodity")
-            kite_balance = float(margins.get("net", env_capital))
-            capital = min(env_capital, kite_balance)
-            if capital < env_capital:
-                log.info(
-                    f"Starting capital set to Kite balance ₹{capital:.2f} "
-                    f"(lower than env CAPITAL ₹{env_capital:.2f})"
-                )
-            else:
-                log.info(f"Starting capital: ₹{capital:.2f} (env CAPITAL)")
-            return capital
-        except Exception as e:
-            log.warning(f"Could not fetch Kite margins — using env CAPITAL ₹{env_capital:.2f}: {e}")
-            return env_capital
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                margins = self.kite.margins(segment="equity")
+                kite_balance = float(margins.get("net", env_capital))
+                capital = min(env_capital, kite_balance)
+                if capital < env_capital:
+                    log.info(
+                        f"Starting capital set to Kite balance ₹{capital:.2f} "
+                        f"(lower than env CAPITAL ₹{env_capital:.2f})"
+                    )
+                else:
+                    log.info(f"Starting capital: ₹{capital:.2f} (env CAPITAL)")
+                return capital
+            except Exception as e:
+                last_exc = e
+                if attempt < 2:
+                    log.warning(
+                        f"Could not fetch Kite margins (attempt {attempt + 1}/3): {e}. "
+                        f"Retrying in 2s..."
+                    )
+                    time.sleep(2)
+        log.warning(
+            f"Could not fetch Kite margins after 3 attempts — "
+            f"using env CAPITAL ₹{env_capital:.2f}: {last_exc}"
+        )
+        return env_capital
 
     def start(self):
         """Subscribe to events."""

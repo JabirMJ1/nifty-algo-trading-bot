@@ -213,9 +213,10 @@ class StraddleValidator:
             if real_ce is not None and real_pe is not None
             else None
         )
+        real_combined = (real_ce + real_pe) if real_ce is not None and real_pe is not None else None
         diff_pct = (
-            round((real_avg - model_premium) / model_premium * 100, 1)
-            if real_avg and model_premium
+            round((real_combined - model_premium) / model_premium * 100, 1)
+            if real_combined and model_premium
             else None
         )
 
@@ -295,7 +296,7 @@ class StraddleValidator:
                 exit_model_ce = max(0.0, eod_spot - strike)
                 exit_model_pe = max(0.0, strike - eod_spot)
             model_pnl = round(
-                (mp - exit_model_ce + mp - exit_model_pe) * NIFTY_LOT_SIZE, 2
+                (mp - exit_model_ce - exit_model_pe) * NIFTY_LOT_SIZE, 2
             )
 
         self._today.update({

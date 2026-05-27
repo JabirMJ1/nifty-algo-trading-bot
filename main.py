@@ -257,6 +257,10 @@ class TradingBot:
             await self._stop_ec2_instance()
             return
 
+        # Refresh Kite token FIRST so that the KiteConnect instance passed to
+        # OrderManager already has a valid token when _resolve_starting_capital runs.
+        await self.kite_feed.refresh_token()
+
         # Initialize
         self._init_modules()
         self._start_modules()
@@ -269,7 +273,7 @@ class TradingBot:
         # Start event bus in background
         event_bus_task = asyncio.create_task(event_bus.start())
 
-        # Start Kite WebSocket feed
+        # Start Kite WebSocket feed (token already set; start() skips re-auth)
         await self.kite_feed.start()
 
         # Warm up strategy with today's historical candles so indicators are

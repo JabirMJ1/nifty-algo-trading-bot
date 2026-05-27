@@ -65,11 +65,12 @@ class KiteFeed:
                 log.info(f"Resolved {symbol} -> token {token}")
                 continue
 
-            # Exact match failed — treat tradingsymbol as a base name and find front-month FUT
+            # Exact match failed — treat tradingsymbol as a base name and find front-month FUT.
+            # MCX commodity futures have instrument_type "FUTCOM", not "FUT".
             candidates = [
                 i for i in all_instruments
                 if i["exchange"] == exchange
-                and i["instrument_type"] == "FUT"
+                and i["instrument_type"] in ("FUT", "FUTCOM")
                 and i["name"] == tradingsymbol
                 and i.get("expiry")
             ]
@@ -219,11 +220,13 @@ class KiteFeed:
         finally:
             self._restarting = False
 
-    async def start(self):
-        """Start the Kite WebSocket feed in a background thread."""
-        self._loop = asyncio.get_event_loop()
+    async def refresh_token(self):
+        """Refresh the Kite access token using auto_token (pyotp) if credentials are set.
 
-        # Try auto token refresh (uses pyotp if KITE_USER_ID/PASSWORD/TOTP_SECRET are set)
+        Must be called before any Kite API call (e.g. margins fetch in OrderManager).
+        Called explicitly in main.py before _init_modules() so that the KiteConnect
+        instance passed to OrderManager already has a valid token.
+        """
         try:
             from modules.sensory.auto_token import refresh_kite_token
             new_token = await asyncio.get_event_loop().run_in_executor(None, refresh_kite_token)
@@ -235,6 +238,15 @@ class KiteFeed:
         except Exception as e:
             log.warning(f"Auto token refresh failed: {e}. Falling back to existing token.")
             self.authenticate()
+
+    async def start(self):
+        """Start the Kite WebSocket feed in a background thread."""
+        self._loop = asyncio.get_event_loop()
+
+        # Token must already be set by an earlier refresh_token() call (from main.py run()).
+        # Re-authenticate here only as a safety net if called in isolation.
+        if not self.kite.access_token:
+            await self.refresh_token()
 
         self.resolve_instruments()
 
