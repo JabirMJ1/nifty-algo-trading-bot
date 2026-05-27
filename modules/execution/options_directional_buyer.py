@@ -15,7 +15,7 @@ Exit conditions (whichever hits first):
 
 import math
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, time as dt_time, timezone, timedelta
 from typing import Any, Dict, List, Optional
 
 from core.config import settings
@@ -283,6 +283,13 @@ class OptionsDirectionalBuyer:
             return
 
         ts = _parse_timestamp(tick_data.get("timestamp"))
+
+        # Internal EOD safeguard: force-close at 15:30 if scheduler missed it
+        now_time = (ts.astimezone(_IST).time() if ts and ts.tzinfo else datetime.now(_IST).time())
+        if now_time >= dt_time(15, 30):
+            await self._close_position("EOD_FORCE_CLOSE", spot=spot, ts=ts)
+            return
+
         hours_elapsed = _hours_since(self._position["entry_time"], ts) if ts else 1.0
 
         current_prem = _current_premium(

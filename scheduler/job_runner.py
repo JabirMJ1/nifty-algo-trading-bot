@@ -213,10 +213,11 @@ class JobRunner:
     async def _hourly_status(self):
         """Send hourly status update during market hours."""
         from modules.sensory.market_hours import now_ist
+        from core.config import settings
 
         pnl = self._breaker.get_daily_pnl() if self._breaker else 0.0
         trades = self._breaker._trades_today if self._breaker else 0
-        mode = "PAPER" if self._trader else "LIVE"
+        mode = "PAPER" if settings.PAPER_TRADE else "LIVE"
         time_str = now_ist().strftime("%H:%M IST")
 
         msg = (
@@ -227,6 +228,8 @@ class JobRunner:
         )
         if self._trader:
             msg += f"\nBalance: {self._trader.balance:.2f}"
+        elif self._options_buyer:
+            msg += f"\nBalance: {self._options_buyer.balance:.2f}"
 
         await event_bus.publish(
             EventType.ALERT, {"type": "HOURLY_STATUS", "message": msg}

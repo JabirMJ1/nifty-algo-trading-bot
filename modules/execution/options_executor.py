@@ -201,7 +201,7 @@ class OptionsExecutor:
                 transaction_type=self.kite.TRANSACTION_TYPE_SELL,
                 quantity=pos["quantity"],
                 product=self.kite.PRODUCT_MIS,
-                order_type=self.kite.ORDER_TYPE_SL_M,
+                order_type=self.kite.ORDER_TYPE_SLM,
                 trigger_price=round(stop_premium, 2),
             )
             log.info(
