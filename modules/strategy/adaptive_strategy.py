@@ -271,16 +271,16 @@ class AdaptiveStrategy(BaseStrategy):
                     f"(open={first_open:.2f} close={last_close:.2f})"
                 )
 
-        # Wait until 12:00 — give the morning time to establish a clear bias
-        if candle_time < time(12, 0):
+        # Wait until 10:30 — enough time for trend to establish, MACD still fresh
+        if candle_time < time(10, 30):
             return None
 
         # ─── Strict day-quality filter: only trade confirmed trend days ──
-        # Compute morning (9:15→12:00) metrics. Reject choppy/narrow-range
+        # Compute morning (9:15→10:30) metrics. Reject choppy/narrow-range
         # days AND require a clear directional bias from the morning.
         # Then only allow signals that AGREE with the morning bias.
         morning = [c for c in self._today_candles[symbol]
-                   if self._get_time(c) and self._get_time(c) < time(12, 0)]
+                   if self._get_time(c) and self._get_time(c) < time(10, 30)]
         morning_bullish = None
         if not morning:
             return None
@@ -297,7 +297,7 @@ class AdaptiveStrategy(BaseStrategy):
             return None
         morning_bullish = m_close > m_open
 
-        # Stop new signals before force-close: MCX at 23:15 (force-close at 23:20), NSE at 14:30
+        # Stop new signals before force-close at 14:30 (gives 1h of hold before 15:30 close)
         exchange = symbol.split(":")[0].upper() if ":" in symbol else "NSE"
         no_trade_cutoff = time(23, 15) if exchange == "MCX" else time(14, 30)
         if candle_time >= no_trade_cutoff:
@@ -343,24 +343,20 @@ class AdaptiveStrategy(BaseStrategy):
         # Only take BUY signals above the 50-EMA, SELL signals below it.
         ema50 = ema(closes, 50) if len(closes) >= 50 else None
 
-        # ─── MACD histogram acceleration gate ───────────────────────────
-        # Block BUY when histogram is falling (fading momentum).
-        # Block SELL when histogram is rising. Crossover entries still pass
-        # because a fresh cross takes histogram from negative→positive (growing).
-        hist_bullish = histogram > 0 and histogram > prev_hist
-        hist_bearish = histogram < 0 and histogram < prev_hist
-        hist_fresh_bull_cross = prev_hist <= 0 < histogram
-        hist_fresh_bear_cross = prev_hist >= 0 > histogram
-        macd_ok_for_buy  = hist_bullish or hist_fresh_bull_cross
-        macd_ok_for_sell = hist_bearish or hist_fresh_bear_cross
+        # ─── MACD histogram direction gate ──────────────────────────────
+        # Require MACD histogram on the correct side (positive for buy,
+        # negative for sell). Acceleration was too strict — by the time the
+        # 10:30 morning gate opens, momentum has already peaked.
+        macd_ok_for_buy  = histogram > 0
+        macd_ok_for_sell = histogram < 0
 
         # ─── 1-hour MACD alignment gate ────────────────────────────────
-        # 15-min cross often fights the 1-hour trend. Block conflicting
-        # signals. Take every 4th 15-min close as a rough hourly close.
+        # Block signals that fight the hourly trend. With 5-min candles,
+        # sample every 12th close (12 × 5min = 60min) for true hourly MACD.
         h1_ok_for_buy = True
         h1_ok_for_sell = True
-        if len(closes) >= 35 * 4:
-            hourly_closes = closes[::4]
+        if len(closes) >= 35 * 12:
+            hourly_closes = closes[::12]
             h1_macd, h1_signal, _ = macd(hourly_closes)
             h1_ok_for_buy  = h1_macd >= h1_signal
             h1_ok_for_sell = h1_macd <= h1_signal
@@ -395,13 +391,13 @@ class AdaptiveStrategy(BaseStrategy):
         # ─── Phase 4: Emit signal if score threshold met ────────────
         nearest_sup = max((s for s in supports if s < price), default=None)
         nearest_res = min((r for r in resistances if r > price), default=None)
-        log.debug(
+        log.info(
             f"SCORE {symbol} | buy={buy_score} sell={sell_score} | "
             f"price={price:.1f} vwap={current_vwap:.1f} stoch_rsi={current_srsi:.1f} "
             f"macd={macd_line:.2f} sig={signal_line:.2f} hist={histogram:.2f} "
-            f"sup={nearest_sup} res={nearest_res} "
-            f"adx={adx:.1f} regime={self.vix.preferred_mode(symbol)} "
-            f"first_hour={self._first_hour_direction.get(symbol)}"
+            f"adx={adx:.1f} morning={'bull' if morning_bullish else 'bear'} "
+            f"regime={self.vix.preferred_mode(symbol)} "
+            f"buy_blocked={buy_blocked} sell_blocked={sell_blocked}"
         )
 
         min_score = 60
