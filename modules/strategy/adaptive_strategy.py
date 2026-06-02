@@ -186,9 +186,6 @@ class AdaptiveStrategy(BaseStrategy):
         self._prev_histogram: Dict[str, float] = {}
         self.max_trades_per_day = 2
 
-        # Sentiment cache — keyed by "MARKET" or symbol
-        self._sentiment_cache: Dict[str, Dict] = {}
-
     def _get_day(self, candle: Dict[str, Any]) -> str:
         ts = candle["timestamp"]
         if hasattr(ts, "strftime"):
@@ -204,25 +201,6 @@ class AdaptiveStrategy(BaseStrategy):
         if hasattr(ts, "time"):
             return ts.time()
         return None
-
-    def _get_sentiment_key(self, symbol: str) -> str:
-        """Return 'COMMODITY' for MCX instruments, 'EQUITY' for all others."""
-        exchange = symbol.split(":")[0].upper() if ":" in symbol else ""
-        return "COMMODITY" if exchange == "MCX" else "EQUITY"
-
-    def start(self):
-        """Subscribe to CANDLE and SENTIMENT events."""
-        super().start()
-        event_bus.subscribe(EventType.SENTIMENT, self._on_sentiment)
-
-    async def _on_sentiment(self, data: Dict[str, Any]):
-        """Cache the latest sentiment reading."""
-        symbol = data.get("symbol", "MARKET")
-        self._sentiment_cache[symbol] = data
-        log.debug(
-            f"Sentiment cached: {symbol} score={data.get('score', 0):+.2f} "
-            f"magnitude={data.get('magnitude', 0):.2f} | {data.get('summary', '')}"
-        )
 
     def on_candle(self, candle: Dict[str, Any]) -> Optional[Signal]:
         symbol = candle["symbol"]
@@ -368,9 +346,6 @@ class AdaptiveStrategy(BaseStrategy):
             return None
 
         # ─── Phase 3: Score BUY and SELL independently ──────────────
-        sentiment_key = self._get_sentiment_key(symbol)
-        sentiment = self._sentiment_cache.get(sentiment_key, {})
-
         # Apply EMA50 trend, histogram, 1h MACD, and morning-bias gates
         buy_blocked  = (not macd_ok_for_buy  or not h1_ok_for_buy
                         or (ema50 and price < ema50) or not morning_bullish)
@@ -380,12 +355,12 @@ class AdaptiveStrategy(BaseStrategy):
         buy_score  = 0 if buy_blocked else self._score_buy(
             symbol, candle, price, macd_line, signal_line, histogram,
             prev_macd, prev_signal, prev_hist, current_srsi, current_vwap,
-            adx, atr, lunch_hour, sentiment, supports, resistances
+            adx, atr, lunch_hour, supports, resistances
         )
         sell_score = 0 if sell_blocked else self._score_sell(
             symbol, candle, price, macd_line, signal_line, histogram,
             prev_macd, prev_signal, prev_hist, current_srsi, current_vwap,
-            adx, atr, lunch_hour, sentiment, supports, resistances
+            adx, atr, lunch_hour, supports, resistances
         )
 
         # ─── Phase 4: Emit signal if score threshold met ────────────
@@ -429,8 +404,6 @@ class AdaptiveStrategy(BaseStrategy):
                     "vwap": round(current_vwap, 2),
                     "stop_multiplier": settings.STOP_ATR_MULTIPLIER,
                     "target_multiplier": settings.TARGET_ATR_MULTIPLIER,
-                    "sentiment_score": round(sentiment.get("score", 0.0), 2),
-                    "sentiment_summary": sentiment.get("summary", ""),
                 },
             )
             log.info(f"BUY {symbol} | score={buy_score} | {signal.metadata}")
@@ -461,8 +434,6 @@ class AdaptiveStrategy(BaseStrategy):
                     "vwap": round(current_vwap, 2),
                     "stop_multiplier": settings.STOP_ATR_MULTIPLIER,
                     "target_multiplier": settings.TARGET_ATR_MULTIPLIER,
-                    "sentiment_score": round(sentiment.get("score", 0.0), 2),
-                    "sentiment_summary": sentiment.get("summary", ""),
                 },
             )
             log.info(f"SELL {symbol} | score={sell_score} | {signal.metadata}")
@@ -472,8 +443,7 @@ class AdaptiveStrategy(BaseStrategy):
     def _score_buy(
         self, symbol, candle, price, macd_line, signal_line, histogram,
         prev_macd, prev_signal, prev_hist, current_srsi, current_vwap,
-        adx, atr, lunch_hour, sentiment: Dict = None,
-        supports: list = None, resistances: list = None
+        adx, atr, lunch_hour, supports: list = None, resistances: list = None
     ) -> int:
         """Score a potential BUY signal (0-100).
 
@@ -567,22 +537,6 @@ class AdaptiveStrategy(BaseStrategy):
                 elif dist <= 1.5 * atr:
                     score -= 10
 
-        # ── Factor 7: News Sentiment (max +20, min -20) ──
-        if sentiment:
-            s = sentiment.get("score", 0.0)
-            mag = sentiment.get("magnitude", 0.0)
-            if s > 0.7 and mag > 0.5:
-                if price > current_vwap:
-                    score += 20
-                else:
-                    score += 5
-            elif s > 0.3 and mag > 0.3:
-                score += 10
-            elif s < -0.7 and mag > 0.5:
-                score -= 20
-            elif s < -0.3 and mag > 0.3:
-                score -= 10
-
         # ── Penalties ──
         if lunch_hour:
             score -= 15
@@ -594,8 +548,7 @@ class AdaptiveStrategy(BaseStrategy):
     def _score_sell(
         self, symbol, candle, price, macd_line, signal_line, histogram,
         prev_macd, prev_signal, prev_hist, current_srsi, current_vwap,
-        adx, atr, lunch_hour, sentiment: Dict = None,
-        supports: list = None, resistances: list = None
+        adx, atr, lunch_hour, supports: list = None, resistances: list = None
     ) -> int:
         """Score a potential SELL signal (0-100).
 
@@ -685,22 +638,6 @@ class AdaptiveStrategy(BaseStrategy):
                     score -= 20  # selling into a well-tested support floor
                 elif dist <= 1.5 * atr:
                     score -= 10
-
-        # ── Factor 7: News Sentiment (max +20, min -20) ──
-        if sentiment:
-            s = sentiment.get("score", 0.0)
-            mag = sentiment.get("magnitude", 0.0)
-            if s < -0.7 and mag > 0.5:
-                if price < current_vwap:
-                    score += 20
-                else:
-                    score += 5
-            elif s < -0.3 and mag > 0.3:
-                score += 10
-            elif s > 0.7 and mag > 0.5:
-                score -= 20
-            elif s > 0.3 and mag > 0.3:
-                score -= 10
 
         # ── Penalties ──
         if lunch_hour:

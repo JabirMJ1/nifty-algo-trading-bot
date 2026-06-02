@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     NEWS_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     NEWS_FETCH_INTERVAL_MIN: int = 15
-    NEWS_SENTIMENT_ENABLED: bool = True
+    NEWS_SENTIMENT_ENABLED: bool = False
 
     # Historical sentiment (backtesting)
     ALPHAVANTAGE_API_KEY: str = ""
