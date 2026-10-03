@@ -69,7 +69,7 @@ Tick events also go directly to `PositionTracker` (unrealized PnL) and `HealthCh
 ### Strategies
 - **V1** (`ema_crossover.py`): EMA 9/21 crossover + RSI — backtesting only
 - **V2** (`ema_crossover_v2.py`): V1 + ADX filter + VWAP + cooldown — backtesting only
-- **V3 / Adaptive** (`adaptive_strategy.py`): Scoring engine (0–100, threshold 65) — **currently active in main.py**. Combines EMA crossover, RSI, VWAP, ADX, gap fill, first-hour direction, and VIX regime. No trades before 10:15 AM or after 2:30 PM. Max 2 trades/symbol/day.
+- **V3 / Adaptive** (`adaptive_strategy.py`): Scoring engine (0–100, threshold 60) — **currently active in main.py**. MACD (12/26/9) is the primary trigger; StochRSI, VWAP, ADX, opening-range direction, multi-touch support/resistance zones and a realized-vol regime add or subtract points. Hard gates: ADX ≥ 20, 50-EMA side, MACD histogram direction, hourly MACD, and morning-bias/day-quality filters. News sentiment is no longer part of scoring. No trades before 10:30 AM or after 2:30 PM. Max 2 trades/symbol/day. See `docs/STRATEGY.md`.
 - **Straddle** (`straddle_920.py`): 9:20 AM short straddle on Nifty weekly ATM options — wired only as scheduler alerts, not live execution.
 - `multi_strategy.py` and `vwap_reversion.py` exist but are not wired into `main.py`.
 
